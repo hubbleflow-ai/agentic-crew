@@ -1,0 +1,8 @@
+# Everything the crew creates lives in one namespace, so `kubectl delete ns crew`
+# is a complete teardown and nothing leaks into the cluster's other tenants.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crew
+  labels:
+    app.kubernetes.io/name: agentic-crew

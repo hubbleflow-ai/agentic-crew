@@ -1,0 +1,54 @@
+# Two identities, deliberately unequal.
+#
+# The control plane may create and inspect Jobs · that is its entire reason to
+# talk to the API server. The agents get an identity with no permissions at
+# all: a model that decides to try `kubectl` finds nothing it can do. Agents
+# reach the crew through the control plane's HTTP API, never through the
+# cluster API.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crew-control-plane
+  namespace: crew
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crew-agent
+  namespace: crew
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crew-agent-launcher
+  namespace: crew
+rules:
+  # Launch agents, count them, and clean up on teardown.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get"]
+  # Find the pod behind a Job so its logs can be streamed to the founder.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crew-control-plane-launcher
+  namespace: crew
+subjects:
+  - kind: ServiceAccount
+    name: crew-control-plane
+    namespace: crew
+roleRef:
+  kind: Role
+  name: crew-agent-launcher
+  apiGroup: rbac.authorization.k8s.io

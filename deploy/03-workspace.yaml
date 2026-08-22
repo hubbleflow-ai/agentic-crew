@@ -1,0 +1,18 @@
+# One volume, one sub-directory per project.
+#
+# Agents on the same project share a filesystem · that is how a backend
+# engineer's code reaches the reviewer without either of them holding it in
+# context. The Job mounts this claim with `subPath: <project-id>`, so a
+# project cannot read another project's files by walking up a path.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: crew-workspace
+  namespace: crew
+spec:
+  accessModes:
+    - ReadWriteMany   # many agents, one volume · hostpath on minikube honours this
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard

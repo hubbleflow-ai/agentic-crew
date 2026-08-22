@@ -1,0 +1,37 @@
+# The spawn caps in domain/caps.py are the *polite* limit · they refuse in
+# words a model can act on. This quota is the limit that does not negotiate.
+#
+# Both exist on purpose. Application code can have a bug; a ResourceQuota is
+# enforced by the API server, so a runaway spawn loop fails at admission
+# rather than filling the node.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: crew-quota
+  namespace: crew
+spec:
+  hard:
+    # 3 projects x roughly 10 agents, plus the platform pods.
+    pods: "40"
+    requests.cpu: "6"
+    requests.memory: 10Gi
+    limits.cpu: "12"
+    limits.memory: 20Gi
+    persistentvolumeclaims: "4"
+---
+# A pod with no limits can eat the node. This makes the defaults explicit for
+# anything that forgets to ask.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: crew-defaults
+  namespace: crew
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "1"
+        memory: 1Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi

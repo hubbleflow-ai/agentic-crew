@@ -19,6 +19,9 @@ ignore = ["ANN401", "B008"]        # Any in **kwargs; FastAPI Depends in default
 
 [tool.mypy]
 python_version = "3.12"
+mypy_path = "."
+explicit_package_bases = true
+namespace_packages = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true      # deepagents/langchain ship partial stubs

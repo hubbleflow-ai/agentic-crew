@@ -28,11 +28,11 @@ from typing import Any
 
 import docker
 import redis.asyncio as redis
-from redis.exceptions import TimeoutError as RedisTimeoutError
 import yaml
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
