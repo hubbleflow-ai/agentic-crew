@@ -1,0 +1,32 @@
+# Secrets
+.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Workspace volume · everything agents generate at runtime is ephemeral.
+# Real dirs are workspace/task-<id>/ and workspace/evidence/<agent-id>/,
+# which the old `workspace/tasks/` pattern never matched.
+workspace/*
+!workspace/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp

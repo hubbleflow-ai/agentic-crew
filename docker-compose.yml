@@ -1,0 +1,181 @@
+# Hubbleflow Crew · local dev stack
+#
+# Local dev runs everything in Docker Compose. Production runs the same agents
+# in Kubernetes Jobs (each task gets its own namespace). The control plane
+# abstracts both runtimes behind the same /agents/spawn interface.
+#
+# Spin up:   docker compose up --build
+# Tear down: docker compose down -v
+#
+# Service tiers:
+#   tier 0 · infra            · redis, postgres
+#   tier 1 · mock MCP servers · tickets, github, sandbox, browser, jira
+#   tier 2 · control plane    · FastAPI · spawns/kills agent containers
+#   tier 3 · web              · Next.js operator console
+#
+# Agent containers are NOT defined here · the control plane spawns them on
+# demand via docker.sock. Each agent gets a unique container name like
+# `crew-agent-em-3a8f` and joins the `crewnet` network.
+
+name: agentic-crew
+
+x-agent-env: &agent-env
+  REDIS_URL: redis://redis:6379/0
+  POSTGRES_URL: postgresql://crew:crew@postgres:5432/crew
+  # Gemini (Google AI Studio key) powers every agent via DeepAgents.
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:?GOOGLE_API_KEY required in .env}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+  # Phoenix tracing · every Gemini/LangGraph call + MCP hop becomes a span.
+  PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Absolute HOST path of ./workspace. Needed because the control plane and
+  # mcp-sandbox spawn SIBLING containers via the host Docker daemon, which
+  # resolves bind-mount sources against the host filesystem, not the
+  # container's. Run `docker compose` from the repo root so ${PWD} is correct.
+  HOST_WORKSPACE: ${PWD}/workspace
+
+services:
+
+  # ──────────────────────────── tier 0 · infra ────────────────────────────
+
+  # Phoenix · observability UI + OTLP collector (traces of every agent's
+  # Gemini/LangGraph calls and MCP tool hops). UI at http://localhost:6006
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports: ["6006:6006"]
+    networks: [crewnet]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [crewnet]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: crew
+      POSTGRES_PASSWORD: crew
+      POSTGRES_DB: crew
+    ports: ["5432:5432"]
+    volumes:
+      - crew-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crew"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks: [crewnet]
+
+  # ─────────────────────── tier 1 · mock MCP servers ──────────────────────
+  # Each MCP server is a thin FastAPI service that returns pre-scripted
+  # data for the demo scenario. In production these are replaced by real
+  # integrations (real GitHub OAuth, real Sandbox like E2B, etc).
+
+  mcp-tickets:
+    image: crew-agent:latest
+    command: uvicorn mocks.mcp_tickets.main:app --host 0.0.0.0 --port 9001
+    ports: ["9001:9001"]
+    environment:
+      <<: *agent-env
+    networks: [crewnet]
+
+  mcp-github:
+    image: crew-agent:latest
+    command: uvicorn mocks.mcp_github.main:app --host 0.0.0.0 --port 9002
+    ports: ["9002:9002"]
+    environment:
+      <<: *agent-env
+    networks: [crewnet]
+
+  mcp-sandbox:
+    image: crew-agent:latest
+    command: uvicorn mocks.mcp_sandbox.main:app --host 0.0.0.0 --port 9003
+    ports: ["9003:9003"]
+    environment:
+      <<: *agent-env
+      # Inherit the same network so spawned sandboxes can be reached
+      CREW_NETWORK: agentic-crew_crewnet
+      # Sandbox image · python:3.12-slim with pytest/ruff/mypy pre-installed
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-crew-sandbox:latest}
+    volumes:
+      # Needs docker.sock to spawn per-task sandbox containers (Option B · real CodeAct)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared workspace where agents read/write files via the sandbox
+      - ./workspace:/workspace
+    networks: [crewnet]
+
+  mcp-browser:
+    image: crew-agent:latest
+    command: uvicorn mocks.mcp_browser.main:app --host 0.0.0.0 --port 9004
+    ports: ["9004:9004"]
+    environment:
+      <<: *agent-env
+    volumes:
+      # Real Chromium screenshots saved here for the UI to render
+      - ./workspace:/workspace
+    networks: [crewnet]
+
+  mcp-jira:
+    image: crew-agent:latest
+    command: uvicorn mocks.mcp_jira.main:app --host 0.0.0.0 --port 9005
+    ports: ["9005:9005"]
+    environment:
+      <<: *agent-env
+    networks: [crewnet]
+
+  # ────────────────────────── tier 2 · control plane ─────────────────────
+  # FastAPI service. Spawns agent containers on demand via docker.sock.
+  # Listens to Redis pub/sub for agent events and relays to the UI via
+  # WebSocket. Enforces spawn caps server-side.
+
+  control-plane:
+    image: crew-agent:latest
+    command: uvicorn apps.control_plane.main:app --host 0.0.0.0 --port 8001 --reload
+    ports: ["8001:8001"]
+    environment:
+      <<: *agent-env
+      DOCKER_HOST: unix:///var/run/docker.sock
+      CREW_AGENT_IMAGE: crew-agent:latest
+      CREW_NETWORK: agentic-crew_crewnet
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workspace:/workspace
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    networks: [crewnet]
+
+  # ───────────────────────── tier 3 · web (Next.js) ──────────────────────
+
+  web:
+    # Behind the "ui" profile · the Next.js console isn't built yet
+    # (apps/web is empty). Excluded from a plain `docker compose up`.
+    # Once the UI exists, run: docker compose --profile ui up
+    profiles: ["ui"]
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    command: npm run dev
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_CONTROL_PLANE_URL: http://localhost:8001
+      NEXT_PUBLIC_WS_URL: ws://localhost:8001/stream
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+    depends_on:
+      - control-plane
+    networks: [crewnet]
+
+networks:
+  crewnet:
+    driver: bridge
+
+volumes:
+  crew-db:

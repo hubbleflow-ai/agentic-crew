@@ -1,0 +1,24 @@
+# Hubbleflow Crew · spawn caps per agent role.
+#
+# Enforced server-side in the control plane · even if the UI allowed a
+# spawn, the control plane refuses if the cap is reached.
+#
+# Singletons (EM, PM) are exactly 1 always · they're the orchestration
+# layer. Engineering roles allow parallelism up to their cap.
+#
+# Cap overrides require explicit Founder approval (HITL gate).
+
+limits:
+  engineering_manager: 1   # exactly 1 · always
+  product_manager: 1       # exactly 1 · always
+  backend_engineer: 4      # parallelism for parallel work
+  frontend_engineer: 2     # one per major UI feature
+  qa_engineer: 2
+  code_reviewer: 2         # multi-reviewer for high-stakes PRs
+  devops_engineer: 1
+  security_engineer: 1
+  sre: 1
+  tech_writer: 1
+
+# Per-task total cap across all roles (hard ceiling regardless of per-role caps)
+total_per_task: 14
