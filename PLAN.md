@@ -30,10 +30,29 @@ Everything runs in Kubernetes. Docker Compose is retired for this repo.
 `control-plane`, `web`, `redis`, `postgres`, `grafana`, `loki`,
 and the five MCP servers (`tickets`, `github`, `sandbox`, `browser`, `jira`).
 
-**Dynamic workloads** — Pods created by the control plane through
-`CoreV1Api.create_namespaced_pod`, never a Deployment, because each agent is a
-one-shot process: `restart_policy=Never`, labels
-`{app: crew-agent, role: <role>, project_id: <id>}`.
+**Dynamic workloads — Jobs, not bare Pods.** An agent is a one-shot process,
+so the control plane creates a **Job** via `BatchV1Api.create_namespaced_job`
+and then does nothing further. Kubernetes owns the whole lifecycle:
+
+```yaml
+kind: Job
+spec:
+  backoffLimit: 2                 # k8s retries a crashed agent
+  ttlSecondsAfterFinished: 300    # the TTL controller deletes it afterwards
+  template:
+    metadata:
+      labels: {app: crew-agent, role: <role>, project_id: <id>}
+    spec:
+      restartPolicy: Never
+```
+
+We deliberately do **not** poll `status.phase` or call `delete_namespaced_pod`
+the way mind-palace does — that is us doing lifecycle management in a
+Kubernetes costume. With a Job, placement, retry, completion tracking and
+cleanup are the cluster's responsibility. The control plane's only act is to
+*ask* for an agent; everything after the request belongs to Kubernetes.
+
+Watch completion with a label-selector watch on Jobs, not a polling loop.
 
 **Why full pays for itself** — each of these replaces something we would
 otherwise hand-roll:
@@ -117,11 +136,32 @@ Split `apps/control_plane/main.py` (544 lines, mixes HTTP + orchestration +
 Docker) into:
 
 ```
-domain/     Project, Task, Agent, Ticket — pure, no I/O
-ports/      protocols: AgentRuntime, SandboxBackend, EventBus
-adapters/   docker_runtime, k8s_runtime, docker_sandbox, e2b_sandbox, redis_bus
-api/        FastAPI only
+domain/     the rules, as plain Python with no I/O whatsoever
+            Project, Task, Agent, Ticket · "a project starts as 'New Project'"
+            · "a cap of 4 is exceeded at the 5th" · unit-testable in ms,
+            with no cluster running
+
+ports/      one-line contracts saying WHAT is needed, never HOW
+            class AgentRuntime(Protocol):
+                async def launch(self, role, project_id) -> AgentHandle: ...
+                async def status(self, handle) -> AgentStatus: ...
+            also SandboxBackend, EventBus
+
+adapters/   the implementations of those contracts
+            k8s_runtime (Jobs) · docker_runtime (laptop fallback)
+            docker_sandbox · e2b_sandbox (later) · redis_bus
+
+api/        FastAPI routes and nothing else — they call domain functions
+            and never touch Kubernetes
 ```
+
+**Why this earns its keep here:** the cap logic (#4) and project-naming rules
+(#5) are the parts most likely to carry bugs, and today neither can be tested
+without Docker running. After the split they can. Swapping Kubernetes for
+Docker, or adding E2B for sandboxes, becomes a config line rather than an edit
+to business logic. And notebook 07 points at these files to explain what a
+*team* harness is — "here is the rule, in one file, with no infrastructure in
+it" teaches far better than a 544-line module.
 
 Ports-and-adapters is what makes `docker|k8s` and `docker|e2b` a config switch
 rather than a rewrite. Also: replace the hand-rolled event walk in
@@ -160,12 +200,12 @@ scoping, *not* deduplication.
 - `RubricMiddleware` as the basis for evals
 
 ### Phase 5 · Kubernetes, full (#1) + sandbox (#10)
-Write `deploy/` (see §1). Implement `adapters/k8s_runtime.py` behind the
-`AgentRuntime` port, modelled on mind-palace's
-`control-plane/app/spawner.py` (129 lines: `V1Pod`, `create_namespaced_pod`,
-poll `status.phase`, `read_namespaced_pod_log`, `delete_namespaced_pod`).
+Write `deploy/` (see §1). Implement `adapters/k8s_runtime.py` behind the `AgentRuntime` port. Reference
+mind-palace's `control-plane/app/spawner.py` for the client mechanics, but
+**not** its design — it creates bare Pods and hand-manages their lifecycle.
+We create Jobs and let the cluster do it.
 
-Caps become label-selector counts plus a namespace `ResourceQuota`.
+Caps become label-selector counts over Jobs plus a namespace `ResourceQuota`.
 `/workspace` becomes a PVC. **The `docker.sock` mount disappears entirely** —
 the sandbox is a pod with a `securityContext`, so nothing needs the host
 daemon.
