@@ -100,10 +100,10 @@ deploy/
 | 1 | Each agent in its own container; 3 backend engineers = 3 containers | ✅ already works |
 | 2 | Progressive disclosure of skills | ❌ full prompt every call |
 | 3 | EM/PM decide who answers a generic question | ⚠️ EM triages alone; PM never sees founder |
-| 4 | Max caps per agent type | ⚠️ per-task only, in-memory |
-| 5 | Chat named "New Project" until scope is concrete, then renamed | ❌ no project concept |
-| 6 | Multiple concurrent projects | ⚠️ possible; state in-memory, caps not global |
-| 7 | Extremely clean code, proper patterns | ❌ 544-line `main.py` mixing concerns; 34 ruff errors |
+| 4 | Max caps per agent type | ✅ per-project + global, counted from live Jobs |
+| 5 | Chat named "New Project" until scope is concrete, then renamed | ✅ domain + API; EM tool still to wire |
+| 6 | Multiple concurrent projects | ✅ 3 concurrent, isolated workspaces, global caps |
+| 7 | Extremely clean code, proper patterns | ⚠️ new code clean (0 errors, 55 tests); `main.py` still there |
 | 8 | Proper README | ❌ current one stale in 3 places |
 | 9 | Proper harness use | ❌ 4 of 18 `create_deep_agent` params used |
 | 10 | Code execution in sandbox containers (E2B if possible) | ⚠️ Docker + `docker.sock` mounted |
@@ -131,7 +131,7 @@ deploy/
 - `agents/shared/logging_setup.py` — structured JSON logging, stdout + Loki,
   `bind_context()` for project/task/agent/role. Clean under ruff and mypy.
 
-### Phase 1 · Layering and middleware
+### Phase 1 · Layering and middleware — **DONE** (`cf90c4d`, `f22b8d6`)
 Split `apps/control_plane/main.py` (544 lines, mixes HTTP + orchestration +
 Docker) into:
 
@@ -148,8 +148,8 @@ ports/      one-line contracts saying WHAT is needed, never HOW
             also SandboxBackend, EventBus
 
 adapters/   the implementations of those contracts
-            k8s_runtime (Jobs) · docker_runtime (laptop fallback)
-            docker_sandbox · e2b_sandbox (later) · redis_bus
+            k8s_runtime (Jobs) · fake_runtime (tests) · redis_events
+            memory_store · e2b_sandbox (later)
 
 api/        FastAPI routes and nothing else — they call domain functions
             and never touch Kubernetes
@@ -167,7 +167,41 @@ Ports-and-adapters is what makes `docker|k8s` and `docker|e2b` a config switch
 rather than a rewrite. Also: replace the hand-rolled event walk in
 `agent_loop.py` with a real middleware (this becomes notebook 02's example).
 
-### Phase 2 · Projects (#5, #6)
+**What landed, and what changed from this sketch:**
+
+- A fourth layer, `service.py`, sits between `api/` and `domain/`. Routes
+  turned out to need somewhere to compose *several* port calls (count the
+  census, ask the domain, launch, emit) and putting that in a route puts
+  policy back in FastAPI. Ports-and-adapters calls this the application layer.
+- **No `docker_runtime`.** "Kubernetes full" means a Docker fallback would be
+  a second lifecycle implementation to keep correct, so the second adapter is
+  `fake_runtime` — in-memory, for tests. Stated here because the sketch above
+  promised one.
+- `AgentRuntime` gained `handles()` alongside `census()`: the roster the
+  founder sees needs *who*, not just *how many*.
+- `AgentStatus` carries a `reason` and an `is_stuck` flag. Verified against
+  minikube: a pod that cannot start (missing Secret, unpullable image) reads
+  as *active* to a Job, so a Job-only status calls a permanently broken agent
+  "running". Kubernetes also never fails those on its own.
+- A crashed pod is **not** terminal while the Job has retries left. Only the
+  Job's `Failed` condition ends an agent.
+- Store is `InMemoryProjectStore` for now. The Postgres adapter is a port
+  implementation away; nothing above it changes.
+
+**Verified on the cluster, not just typed** (`kubectl` transcript in commit
+`cf90c4d`): healthy agent → `succeeded`; failing agent → 3 attempts →
+`BackoffLimitExceeded`; bad image → flagged stuck at `ErrImagePull`.
+
+### Phase 2 · Projects (#5, #6) — **MOSTLY DONE** (`f22b8d6`)
+
+Done: `Project` domain type, `/projects` API replacing `/tasks`, three
+concurrent projects, `PROVISIONAL_NAME`, rename with validation, per-project
+event history and live stream.
+
+Still to do: give the EM a `name_project` tool so the rename is *its* decision
+rather than an endpoint nobody calls, and move the agent-side callers off
+`/tasks` so `main.py` can be deleted.
+
 `Project` becomes the top-level entity. Created as **"New Project"** with
 `name_status="provisional"`. EM gets a `name_project(name, rationale)` tool,
 callable once scope is concrete; emits `project.renamed` on the bus so the UI
