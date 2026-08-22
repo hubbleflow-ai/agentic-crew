@@ -18,16 +18,59 @@ on *what an agent harness is*.
 | Old control-plane endpoints | **removed**, no back-compat | `/tasks` becomes `/projects/{id}/tasks` |
 | Notebook 02 (current) | will break and be replaced | superseded by the new ladder |
 
-### Still open
+| Kubernetes | **FULL** — everything in the cluster | decided 2026-08-22; see below |
 
-- **Kubernetes: hybrid or full?**
-  - *hybrid* — agent pods in cluster, infra in Compose (what mind-palace does)
-  - *full* — everything in the cluster
-  - **Recommendation: full.** Requirements 4, 6 and 10 are things k8s does
-    natively (ResourceQuota, label-selector counts, securityContext) that we
-    would otherwise hand-roll in memory.
-  - Cost of full: cohort uses `kubectl get pods`, not `docker ps`; images must
-    be `minikube image load`ed.
+### Kubernetes: full cluster — DECIDED
+
+Everything runs in Kubernetes. Docker Compose is retired for this repo.
+
+**Namespace:** `hubbleflow-crew`
+
+**Long-lived workloads** — Deployment + Service each:
+`control-plane`, `web`, `redis`, `postgres`, `grafana`, `loki`,
+and the five MCP servers (`tickets`, `github`, `sandbox`, `browser`, `jira`).
+
+**Dynamic workloads** — Pods created by the control plane through
+`CoreV1Api.create_namespaced_pod`, never a Deployment, because each agent is a
+one-shot process: `restart_policy=Never`, labels
+`{app: crew-agent, role: <role>, project_id: <id>}`.
+
+**Why full pays for itself** — each of these replaces something we would
+otherwise hand-roll:
+
+| Requirement | Kubernetes gives us |
+|---|---|
+| #4 caps per agent type | label-selector counts + `ResourceQuota` — survives a control-plane restart, unlike today's in-memory dict |
+| #6 concurrent projects | scheduler handles placement; quota bounds the whole namespace |
+| #10 sandbox isolation | `securityContext` (non-root, `readOnlyRootFilesystem`, dropped caps) — and **no `docker.sock` anywhere** |
+| #1 container per agent | a Pod *is* the container, with resource limits attached |
+
+**Shared workspace:** a PVC mounted at `/workspace` by every agent pod.
+minikube's default `standard` StorageClass is hostPath and supports
+`ReadWriteMany` on a single node, which is all we need.
+
+**Access:** `kubectl port-forward` for development; keep the same host ports as
+now so nothing else in the plan changes — web 4000, control-plane 9000,
+Grafana 3003, Loki 3100.
+
+**Images:** built locally then `minikube image load crew-agent:latest` (and
+`crew-sandbox`, `agentic-crew-web`). This is the step people trip over — a pod
+stuck in `ErrImagePull` almost always means the image was never loaded.
+Set `imagePullPolicy: IfNotPresent` so the cluster never reaches for a registry.
+
+**Cost accepted:** the cohort inspects with `kubectl get pods`, not `docker ps`.
+minikube must be running (profile: 4 CPUs / 6144 MB, **driver=docker**, so
+Docker still has to be up underneath).
+
+**Layout:**
+```
+deploy/
+  namespace.yaml
+  base/            redis, postgres, loki, grafana, mcp-*, control-plane, web
+  agent-pod.yaml   the template the spawner fills in
+  workspace-pvc.yaml
+  quota.yaml       ResourceQuota — the global cap for #4/#6
+```
 
 ---
 
@@ -116,12 +159,19 @@ scoping, *not* deduplication.
 - `SummarizationMiddleware` replacing `history[-40:]`
 - `RubricMiddleware` as the basis for evals
 
-### Phase 5 · Kubernetes (#1) + sandbox (#10)
-Port mind-palace's `control-plane/app/spawner.py` (129 lines: `V1Pod`,
-`create_namespaced_pod`, poll `status.phase`, `read_namespaced_pod_log`,
-`delete_namespaced_pod`). Caps become label-selector counts, which survive a
-control-plane restart. `/workspace` becomes a PVC. **Drop the `docker.sock`
-mount** — the sandbox becomes a pod with a `securityContext`.
+### Phase 5 · Kubernetes, full (#1) + sandbox (#10)
+Write `deploy/` (see §1). Implement `adapters/k8s_runtime.py` behind the
+`AgentRuntime` port, modelled on mind-palace's
+`control-plane/app/spawner.py` (129 lines: `V1Pod`, `create_namespaced_pod`,
+poll `status.phase`, `read_namespaced_pod_log`, `delete_namespaced_pod`).
+
+Caps become label-selector counts plus a namespace `ResourceQuota`.
+`/workspace` becomes a PVC. **The `docker.sock` mount disappears entirely** —
+the sandbox is a pod with a `securityContext`, so nothing needs the host
+daemon.
+
+Keep `adapters/docker_runtime.py` working: it is the fallback when no cluster
+is available, and the `AgentRuntime` port is what makes that a config switch.
 
 ### Phase 6 · Observability, docs, tests
 - Loki + Grafana in compose — **ports 3100 and 3003** (3000/3001 taken)
