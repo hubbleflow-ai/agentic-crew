@@ -47,13 +47,22 @@ class FakeAgentRuntime:
 
     async def census(self, role: AgentRole, project_id: str | None = None) -> int:
         """Count the same way the real adapter does · live agents only."""
-        return sum(
-            1
+        return len(self._live(role, project_id))
+
+    def _live(self, role: AgentRole, project_id: str | None) -> list[str]:
+        return [
+            name
             for name, spec in self._specs.items()
             if spec.role is role
             and (project_id is None or spec.project_id == project_id)
             and not self._states[name].state.is_terminal
-        )
+        ]
+
+    async def handles(self, role: AgentRole, project_id: str) -> list[AgentHandle]:
+        return [
+            AgentHandle(id=name, name=name, role=role, project_id=project_id)
+            for name in self._live(role, project_id)
+        ]
 
     async def logs(self, handle: AgentHandle, *, tail: int = 200) -> str:
         return self._logs.get(handle.name, "")

@@ -136,4 +136,12 @@ class AgentRuntime(Protocol):
         """
         ...
 
+    async def handles(self, role: AgentRole, project_id: str) -> list[AgentHandle]:
+        """The live agents of a role on a project, not just how many.
+
+        ``census`` answers "may I spawn another"; this answers "who is on this
+        project" · the roster the founder sees.
+        """
+        ...
+
     async def logs(self, handle: AgentHandle, *, tail: int = 200) -> str: ...

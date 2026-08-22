@@ -1,7 +1,6 @@
 """Both runtimes answer the same contract · one of them needs no cluster."""
 
 import pytest
-
 from apps.control_plane.adapters.fake_runtime import FakeAgentRuntime
 from apps.control_plane.adapters.k8s_runtime import KubernetesAgentRuntime, _job_name
 from apps.control_plane.domain.caps import AgentRole, Census, check_spawn

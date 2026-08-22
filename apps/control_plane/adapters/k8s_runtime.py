@@ -248,6 +248,23 @@ class KubernetesAgentRuntime:
         Only ``active`` Jobs count. A finished agent occupies no slot, and the
         founder should be able to spawn another the moment one completes.
         """
+        return len(await self._live_jobs(role, project_id))
+
+    async def handles(self, role: AgentRole, project_id: str) -> list[AgentHandle]:
+        """The live agents of a role on one project."""
+        return [
+            AgentHandle(
+                id=job.metadata.name,
+                name=job.metadata.name,
+                role=role,
+                project_id=project_id,
+            )
+            for job in await self._live_jobs(role, project_id)
+        ]
+
+    async def _live_jobs(self, role: AgentRole, project_id: str | None) -> list[Any]:
+        """Jobs of a role that have not finished · the one place the selector
+        is built, so counting and listing can never disagree."""
         selector = f"{LABEL_MANAGED}={MANAGED_BY},{LABEL_ROLE}={role.value}"
         if project_id:
             selector += f",{LABEL_PROJECT}={project_id}"
@@ -255,7 +272,7 @@ class KubernetesAgentRuntime:
         jobs = await self.batch.list_namespaced_job(
             namespace=self.namespace, label_selector=selector
         )
-        return sum(1 for job in jobs.items if job.status.active)
+        return [job for job in jobs.items if job.status.active]
 
     async def logs(self, handle: AgentHandle, *, tail: int = 200) -> str:
         """Fetch the agent's stdout, via the pod the Job created."""
