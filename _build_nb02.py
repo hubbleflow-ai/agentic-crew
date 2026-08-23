@@ -1,264 +1,264 @@
-"""Builds notebooks/02_running_the_crew.ipynb. Throwaway."""
+"""Builds notebooks/02_a_middleware_by_hand.ipynb."""
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
 nb.metadata = {"kernelspec": {"display_name": "Python 3 (ipykernel)",
                               "language": "python", "name": "python3"}}
 C = []
-def md(t): C.append(nbf.v4.new_markdown_cell(t))
-def code(t): C.append(nbf.v4.new_code_cell(t))
+def md(t): C.append(nbf.v4.new_markdown_cell(t.strip()))
+def code(t): C.append(nbf.v4.new_code_cell(t.strip()))
 
-md("""# 02 · Running the Crew
+md("""
+# 02 · A middleware, built by hand
 
-*One request in. A team assembles itself.*
+Notebook 01 ended on a claim: a harness is a middleware stack, and every
+capability an agent has arrives as a layer in it.
 
-Notebook 01 read the harness. This one drives it: we post a request to the
-control plane and watch an Engineering Manager appear, decide who it needs, and
-spawn them.
+This notebook makes that concrete. You will write a middleware in about ten
+lines, watch it fire, and then read the one this repository actually runs in
+production — which is the same shape, only longer.
 
-The thing to watch for is that **nobody schedules this**. There is no workflow
-engine and no plan file. An agent reads its brief, decides a Product Manager is
-required, and calls an API to create one.
+Middleware is a smaller idea than the word suggests. It is a set of **hooks**.
+""")
 
-In this notebook:
+md("""
+## The seven places you can stand
 
-1. The control plane's surface — what can be asked of it.
-2. Post a request, and watch the EM spawn a team.
-3. Read the live event stream over Redis.
-4. Find what the crew wrote to the shared workspace.
-5. Spawn caps, and why they exist.
+An agent turn is a loop: assemble a request, call the model, run whatever tools
+it asked for, call the model again with the results, until it stops asking.
 
-> **Prerequisite.** `docker compose up -d`. Agents call Gemini, so a run takes
-> a few minutes and costs tokens.""")
+A middleware is code that runs at named points in that loop.
+""")
 
-code('''import os
-if os.path.basename(os.getcwd()) == "notebooks":
-    os.chdir("..")
+code("""
+import pathlib
+import sys
 
-import json, time, pathlib, subprocess, httpx
+# Notebooks run from notebooks/ · every path below is relative to the repo
+# root, so find it once and work from there.
+ROOT = pathlib.Path.cwd()
+while not (ROOT / "pyproject.toml").exists():
+    ROOT = ROOT.parent
+sys.path.insert(0, str(ROOT))
 
-CREW = os.getenv("CREW_API", "http://localhost:9000")
+print("repo root:", ROOT)
+""")
 
-health = httpx.get(f"{CREW}/health", timeout=5).json()
-print(f"control plane · {health['active_agents']} agents · {health['active_tasks']} tasks")
-print("roles it can spawn:", ", ".join(health["spawn_limits"]))''')
+code("""
+import inspect
+from langchain.agents.middleware import AgentMiddleware
 
-md("""## Step 1 — The control plane's surface
+hooks = [n for n, _ in inspect.getmembers(AgentMiddleware, inspect.isfunction)
+         if not n.startswith("__")]
 
-The crew is driven entirely over HTTP. These are the routes that matter.""")
+sync = sorted(h for h in hooks if not h.startswith("a"))
+print("Hooks (sync form; each has an async twin prefixed with 'a'):")
+print()
+for h in sync:
+    print("   ", h)
+""")
 
-code('''cp = pathlib.Path("apps/control_plane/main.py").read_text()
-for line in cp.splitlines():
-    s = line.strip()
-    if s.startswith("@app.") and "on_event" not in s:
-        print("   ", s.replace("@app.", "").replace('("', "  ").replace('")', ""))''')
+md("""
+Read them as a timeline:
 
-md("""Two are worth noting before we start.
+| Hook | Fires | Sees |
+|---|---|---|
+| `before_agent` | once, at the start | the whole state, before anything happens |
+| `before_model` | every model call | the state about to be turned into a request |
+| `wrap_model_call` | around every model call | the request *and* the response |
+| `after_model` | every model response | what the model just said |
+| `wrap_tool_call` | around every tool call | the call **and** its result |
+| `after_agent` | once, at the end | the final state |
 
-`POST /tasks` takes a field called **`request`**, not `brief` — the founder's
-natural-language input. And `POST /escalations` exists because an agent that
-cannot decide something should ask a human rather than guess.""")
+The two `wrap_*` hooks are the interesting ones. `before`/`after` hooks
+*observe*. A `wrap_*` hook sits **around** the thing — it receives a `handler`
+and decides whether, when, and with what to call it.
 
-md("""## Step 2 — Post a request
+That means a `wrap_*` hook can rewrite the input, retry on failure, substitute
+a cached result, refuse outright, or time the call. All the interesting
+behaviour in a harness lives in wrapping.
+""")
 
-One HTTP call. No agent is named, no plan is supplied.""")
+md("""
+## Ten lines
 
-code('''REQUEST = ("Add a GET /healthz endpoint to the backend that returns "
-           '{"status":"ok"} plus the app version, with one test for it.')
+Here is a middleware that does one thing: announce every tool call and what it
+returned.
 
-task = httpx.post(f"{CREW}/tasks", timeout=60, json={
-    "request": REQUEST,
-    "scenario": "build",
-    "local_hour": 14,
-}).json()
+Note what it does **not** need. It is not told which tools exist. It does not
+register anything. It does not know what agent it is attached to.
+""")
 
-TASK_ID = task["task_id"]
-print(json.dumps(task, indent=2))''')
+code("""
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-md("""Look at the response. The task came back already `em_running`, with an
-`em_agent_id` attached.
 
-The control plane did that on its own: creating a task **auto-spawns an
-Engineering Manager**, because a request with nobody to read it is useless. Every
-other agent is spawned later by the EM, not by us.""")
+class Narrator(AgentMiddleware):
+    \"\"\"Says out loud what the agent is doing.\"\"\"
 
-md("""## Step 3 — Watch the team assemble
+    async def awrap_tool_call(
+        self,
+        request: Any,
+        handler: Callable[[Any], Awaitable[Any]],
+    ) -> Any:
+        name = request.tool_call["name"]
+        args = request.tool_call["args"]
+        print(f"  -> calling {name}({args})")
 
-Each agent is its own container. Poll `/agents` and `docker ps` and you can see
-the team appear.""")
+        result = await handler(request)          # the tool actually runs here
 
-code('''def team(task_id: str | None = None) -> list[dict]:
-    """Agents the control plane knows about, optionally only this task's."""
-    roster = httpx.get(f"{CREW}/agents", timeout=10).json()
-    if task_id:
-        roster = [a for a in roster if a.get("task_id") == task_id]
-    return roster
+        preview = str(getattr(result, "content", result))[:60]
+        print(f"  <- {name} returned {preview}")
+        return result
+""")
 
-def containers() -> list[str]:
-    out = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
-                         capture_output=True, text=True).stdout
-    return sorted(n for n in out.split() if n.startswith("crew-"))
+md("""
+The `handler(request)` line is where the tool runs. Everything before it is
+"before the call", everything after is "after the call", and because both live
+in one function you never have to match a result back to the call that produced
+it.
 
-start = time.time()
-deadline = start + 240
-seen: set[str] = set()
+Hold on to that. It is the entire reason this repo's telemetry is simple.
+""")
 
-print("agents on THIS task as they appear:\\n")
-while time.time() < deadline:
-    roster = team(TASK_ID)
-    for a in roster:
-        key = f"{a['role']}·{a['agent_id']}"
-        if key not in seen:
-            seen.add(key)
-            print(f"  +{time.time() - start:5.0f}s   {a['role']:22} {a['agent_id']}")
-    if len(roster) >= 2:
-        break
-    time.sleep(10)
+md("""
+## Watch it fire
 
-print(f"\\nthis task's team: {len(team(TASK_ID))}   ·   all agents alive: {len(team())}")
-print("containers:", containers())''')
+A real model, two tools, one question that needs both.
+""")
 
-md("""The Engineering Manager was created by the control plane. Anything after it
-was created **by the EM**, mid-reasoning, by calling `POST /agents/spawn`.
+code("""
+import os
+from deepagents import create_deep_agent
+from langchain_google_genai import ChatGoogleGenerativeAI
 
-You can see that decision in its log — a Gemini call, then a spawn:""")
+assert os.environ.get("GOOGLE_API_KEY"), "set GOOGLE_API_KEY (see .env)"
 
-code('''em_container = next((c for c in containers() if "engineering" in c), None)
-if em_container:
-    logs = subprocess.run(["docker", "logs", "--tail", "60", em_container],
-                          capture_output=True, text=True).stdout
-    for line in logs.splitlines():
-        if "agents/spawn" in line or "deepagent.ready" in line or "event.published type=response" in line:
-            print("   ", line.strip()[:130])
-else:
-    print("no EM container found")''')
 
-md("""## Step 4 — The live event stream
+async def celsius_to_fahrenheit(celsius: float) -> float:
+    \"\"\"Convert a temperature in Celsius to Fahrenheit.\"\"\"
+    return celsius * 9 / 5 + 32
 
-Agents publish to a Redis channel per task: `crew/task/<id>/messages`. The
-control plane relays it to the browser over `WS /stream/{task_id}`; the UI on
-**localhost:4000** renders it.
 
-We can subscribe to the same channel directly.""")
+async def describe(fahrenheit: float) -> str:
+    \"\"\"Describe a Fahrenheit temperature in plain words.\"\"\"
+    if fahrenheit < 32:
+        return "freezing"
+    if fahrenheit < 60:
+        return "cold"
+    if fahrenheit < 85:
+        return "pleasant"
+    return "hot"
 
-code('''import asyncio, redis.asyncio as aioredis
 
-async def watch(task_id: str, seconds: int = 45) -> list[dict]:
-    r = aioredis.from_url(os.getenv("CREW_REDIS", "redis://localhost:6381/0"))
-    ps = r.pubsub()
-    await ps.subscribe(f"crew/task/{task_id}/messages")
-    events, end = [], time.time() + seconds
-    while time.time() < end:
-        m = await ps.get_message(ignore_subscribe_messages=True, timeout=5.0)
-        if m and m.get("data"):
-            try:
-                events.append(json.loads(m["data"]))
-            except Exception:
-                pass
-    await ps.unsubscribe(); await r.aclose()
-    return events
+agent = create_deep_agent(
+    model=ChatGoogleGenerativeAI(model="gemini-3.5-flash"),
+    system_prompt="Use the tools. Convert, then describe. Answer in one sentence.",
+    tools=[celsius_to_fahrenheit, describe],
+    middleware=[Narrator()],
+)
 
-events = await watch(TASK_ID)
-print(f"{len(events)} events in 45s\\n")
+result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "Is 31 degrees Celsius pleasant?"}]}
+)
+print()
+print("Final answer:", result["messages"][-1].content)
+""")
 
-from collections import Counter
-for kind, n in Counter(e.get("type", "?") for e in events).most_common():
-    print(f"  {n:4}  {kind}")''')
+md("""
+Every tool call the model made, narrated, in order — without the agent knowing
+it was being watched.
 
-code('''# what the agents were actually doing
-def who(e):
-    return str(e.get("from", "?")).split("/")[0]
+That is the property worth naming. **The middleware did not change what the
+agent does.** Same model, same tools, same answer. It changed what is *visible*
+about it.
 
-for e in events:
-    kind, p = e.get("type"), e.get("payload", {})
-    if kind == "tool_call":
-        preview = str(p.get("result_preview", ""))[:70].replace("\\n", " ")
-        arrow = f"  ->  {preview}" if preview else ""
-        print(f"  {who(e):22} {p.get('tool','?'):22}{arrow}")
-    elif kind == "reasoning":
-        print(f"  {who(e):22} thinks: {str(p.get('text',''))[:90]}")
-    elif kind == "response":
-        print(f"  {who(e):22} says  : {str(p.get('text',''))[:90]}")''')
+Most of a harness is exactly this: layers that add capability or visibility
+without the layers below them knowing.
+""")
 
-md("""That stream is the whole observability story. Every reasoning step, tool call
-and reply from every agent lands on one channel, tagged with who sent it. The UI
-is a renderer over exactly this.
+md("""
+## The same shape, in this repository
 
-Note it is **ephemeral** — Redis pub/sub, not a log. Miss it and it is gone,
-which is why the durable work goes to the filesystem instead.""")
+Now read the real one. Every crew agent runs it, and it is why you can watch a
+pod think.
+""")
 
-md("""## Step 5 — What the crew produced
+code("""
+import pathlib
 
-The event stream says what happened. The workspace holds what was made.""")
+source = (ROOT / "agents/shared/telemetry.py").read_text()
 
-code('''ws = pathlib.Path("workspace") / TASK_ID
-if ws.exists():
-    files = [f for f in sorted(ws.rglob("*"))
-             if f.is_file() and not any(p.startswith((".", "__")) for p in f.parts)]
-    print(f"{len(files)} file(s) in {ws}:")
-    for f in files[:15]:
-        print(f"   {f.relative_to(ws)}  ({f.stat().st_size} bytes)")
-    if files:
-        first = files[0]
-        print(f"\\n─── {first.relative_to(ws)} ───")
-        print(first.read_text()[:600])
-else:
-    print(f"{ws} not created yet — agents may still be scoping.")
-    print("Re-run this cell in a minute, or watch localhost:4000.")''')
+# The two hooks, without the helper functions underneath.
+start = source.index("    async def awrap_tool_call")
+end = source.index("    async def _emit")
+print(source[start:end])
+""")
 
-md("""If the directory is still empty, that is not a failure — the EM and PM spend
-their first minutes on scope and a ticket before anyone writes code. Earlier
-tasks in `workspace/` show the finished shape: a PRD, a backend, tests, a
-frontend.""")
+md("""
+Compare it with `Narrator` above and the differences are small and practical:
 
-md("""## Step 6 — Spawn caps
+* it publishes an `Event` onto the project's channel instead of printing
+* it times the call, so a slow tool is visible as a slow tool
+* it reports a tool that **raised**, rather than letting the failure vanish
+* `_emit` swallows publishing errors — an agent should not die because its
+  event bus hiccuped
 
-An agent that can create agents can create too many. The control plane caps each
-role.""")
+The shape is identical. `wrap_tool_call` around the call, one frame, no
+correlation.
 
-code('''limits = httpx.get(f"{CREW}/health", timeout=5).json()["spawn_limits"]
-for role, cap in limits.items():
-    print(f"  {role:22} max {cap}")
+This replaced about sixty lines that streamed graph updates and reassembled
+them by hand: matching tool calls to results by position, de-duplicating on
+message ids, and re-reading the whole thing whenever the graph changed shape.
+""")
 
-print("\\nasking for one more EM than allowed:")
-resp = httpx.post(f"{CREW}/agents/spawn", timeout=30, json={
-    "task_id": TASK_ID, "role": "engineering_manager", "requested_by": "notebook",
-})
-print(f"   HTTP {resp.status_code} · {str(resp.text)[:160]}")''')
+md("""
+## Installing one
 
-md("""The cap is enforced in the control plane, not requested in a prompt — the same
-principle as the payment gate in the Trip Concierge. **If a limit matters, put it
-where the model cannot reach it.**
+Two ways, and the difference matters.
+""")
 
-`override_cap` exists on the spawn request, and requires founder approval. That
-is the escape hatch, and it is deliberately a human decision.""")
+code("""
+from langchain.agents.middleware import ModelCallLimitMiddleware, SummarizationMiddleware
 
-md("""## Recap
+print("1 · Pass it directly — for middleware you wrote:\\n")
+print("      create_deep_agent(model=..., middleware=[Narrator()])\\n")
 
-1. **One request creates a team.** `POST /tasks` auto-spawns an Engineering
-   Manager; the EM spawns everyone else by calling the same API you just did.
-2. **Agents are containers.** `docker ps` shows the team as it grows and shrinks.
-3. **The event stream is one Redis channel per task**, relayed to the UI over a
-   WebSocket. Ephemeral by design.
-4. **The workspace is the durable output** — PRD, source, tests — shared across
-   every agent on the task.
-5. **Caps live in the control plane**, not the prompt, and lifting one needs a
-   human.
+print("2 · Pass a parameter — for the ones the library ships.")
+print("    These are middleware *configuration*, not something separate:\\n")
+for param, mw in [
+    ("tools=[...]", "the tool node"),
+    ("skills=[...]", "SkillsMiddleware"),
+    ("subagents=[...]", "SubAgentMiddleware"),
+    ("backend=...", "FilesystemMiddleware"),
+    ("interrupt_on={...}", "HumanInTheLoopMiddleware"),
+    ("permissions={...}", "tool exclusion + interrupts"),
+]:
+    print(f"      {param:<22} -> {mw}")
 
-Notebook 03 looks at where that code actually runs, and how well it is contained.
+print()
+print("Available off the shelf, among others:")
+for cls in (SummarizationMiddleware, ModelCallLimitMiddleware):
+    first_line = (cls.__doc__ or "").strip().split(chr(10))[0]
+    print(f"      {cls.__name__:<28} {first_line[:60]}")
+""")
 
----
+md("""
+## What you now know
 
-### Exercises
+1. A middleware is a set of **hooks** into the agent loop.
+2. `before_*`/`after_*` observe; `wrap_*` sits **around** the call and can
+   change, retry, refuse or time it. Wrapping is where the power is.
+3. Because a `wrap_tool_call` sees the call and its result in one frame,
+   nothing downstream has to correlate them.
+4. `create_deep_agent`'s parameters are mostly middleware configuration.
 
-1. Post a deliberately vague request — `"hi"`. Read the EM's system prompt first
-   and predict what it does. Does it spawn anyone?
-2. Watch `/agents` while a task finishes. Do agent containers stop, or linger?
-3. Send a second task while the first is running. Do they share a workspace, a
-   channel, or agents?
-4. `POST /escalations` with a question. Where does it surface, and what is an
-   agent supposed to do while it waits?""")
+From here the notebooks stop being about the idea and start being about the
+specific layers. Next: `FilesystemMiddleware` — the one that turns "a model
+that writes text" into "something that behaves like an engineer".
+""")
 
 nb.cells = C
-nbf.write(nb, "notebooks/02_running_the_crew.ipynb")
-print(f"wrote notebooks/02_running_the_crew.ipynb ({len(C)} cells)")
+nbf.write(nb, "notebooks/02_a_middleware_by_hand.ipynb")
+print("wrote notebooks/02_a_middleware_by_hand.ipynb ·", len(C), "cells")
