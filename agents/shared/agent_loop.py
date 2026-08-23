@@ -24,7 +24,7 @@ import asyncio
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as redis
 from contracts.agent_env import SKILLS_ROOT, WORKSPACE, AgentIdentity
@@ -32,6 +32,7 @@ from contracts.events import ACTIONABLE_KINDS, Event, EventKind, channel_for
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend
 from langchain.agents.middleware import (
+    AgentMiddleware,
     ModelCallLimitMiddleware,
     SummarizationMiddleware,
 )
@@ -181,7 +182,10 @@ class Harness:
             tools=tools,
             backend=_backend(),
             skills=_skill_sources(identity.role),
-            middleware=[
+            # The list is annotated because ModelCallLimitMiddleware declares
+            # a narrower state type than its siblings, and mypy will not widen
+            # a heterogeneous list on its own.
+            middleware=cast("list[AgentMiddleware[Any, Any, Any]]", [
                 TelemetryMiddleware(identity, bus),
                 # A crew agent lives as long as its project. Without this, a
                 # busy one eventually spends its whole context replaying how
@@ -195,7 +199,7 @@ class Harness:
                 # tools without converging would otherwise run until the Job's
                 # deadline, spending the whole time.
                 ModelCallLimitMiddleware(thread_limit=MAX_MODEL_CALLS_PER_TURN),
-            ],
+            ]),
         )
         self.tool_names = [getattr(t, "__name__", str(t)) for t in tools]
 
