@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import redis.asyncio as redis
-from contracts.agent_env import WORKSPACE, AgentIdentity
+from contracts.agent_env import SKILLS_ROOT, WORKSPACE, AgentIdentity
 from contracts.events import ACTIONABLE_KINDS, Event, EventKind, channel_for
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -164,6 +164,7 @@ class Harness:
             system_prompt=system_prompt,
             tools=tools,
             backend=_filesystem_backend(),
+            skills=_skill_sources(identity.role),
             middleware=[TelemetryMiddleware(identity, bus)],
         )
         self.tool_names = [getattr(t, "__name__", str(t)) for t in tools]
@@ -175,6 +176,7 @@ class Harness:
             len(tools),
             WORKSPACE,
         )
+        log.info("harness.skills role=%s sources=%s", identity.role, _skill_sources(identity.role))
 
     async def respond(self, event: Event, bus: AgentBus) -> None:
         """Take one turn.
@@ -210,6 +212,27 @@ def _filesystem_backend() -> FilesystemBackend:
     """
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
     return FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True)
+
+
+def _skill_sources(role: str) -> list[str]:
+    """Which skill directories this role can see, in override order.
+
+    Base skills first, then the role's own, so a role skill of the same name
+    wins. Only directories that exist are returned · a missing one makes the
+    middleware log a warning on every boot, which trains people to ignore
+    warnings.
+
+    Note what is *not* here: another role's directory. A backend engineer
+    cannot read the Engineering Manager's scoping playbook, because it was
+    never in its list. That is scoping by construction rather than by asking
+    the model nicely.
+    """
+    root = Path(SKILLS_ROOT)
+    candidates = [root / "base", root / "roles" / role.replace("_", "-")]
+    sources = [str(p) for p in candidates if p.is_dir()]
+    if not sources:
+        log.warning("harness.no_skills root=%s role=%s", root, role)
+    return sources
 
 
 def _as_prompt(event: Event) -> str:

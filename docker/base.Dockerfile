@@ -27,6 +27,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY contracts /app/contracts
+COPY skills /app/skills
 COPY apps /app/apps
 COPY agents /app/agents
 COPY mocks /app/mocks

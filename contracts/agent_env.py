@@ -23,6 +23,14 @@ REDIS_URL = "REDIS_URL"
 CONTROL_PLANE_URL = "CONTROL_PLANE_URL"
 GEMINI_MODEL = "GEMINI_MODEL"
 
+SKILLS_ROOT = "/app/skills"
+"""Where the skills tree is baked into the image.
+
+In the image rather than on the volume on purpose: skills are code, they are
+reviewed and versioned with the repo, and an agent that could write to its own
+instructions is an agent that can talk itself into anything.
+"""
+
 WORKSPACE = "/workspace"
 """Where the project's shared volume is mounted.
 
