@@ -226,6 +226,14 @@ async def spawn_agent(
     )
 
 
+async def delegate(project_id: str, sender: str, to_role: str, text: str) -> dict:
+    """Hand something to a teammate who is already on the project."""
+    return await _post(
+        f"{_control_plane()}/projects/{project_id}/delegate",
+        {"sender": sender, "to_role": to_role, "text": text},
+    )
+
+
 async def name_project(project_id: str, name: str) -> dict:
     """Replace the placeholder chat title with a real one."""
     return await _patch(f"{_control_plane()}/projects/{project_id}", {"name": name})

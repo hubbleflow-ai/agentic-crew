@@ -13,6 +13,7 @@ from typing import Annotated
 
 from apps.control_plane.api.deps import get_service
 from apps.control_plane.api.schemas import (
+    DelegateRequest,
     EscalationRequest,
     EventView,
     MessageRequest,
@@ -97,6 +98,16 @@ async def post_message(project_id: str, body: MessageRequest, service: Service) 
     await _lookup(service, project_id)
     await service.founder_says(project_id, body.text)
     return {"accepted": True}
+
+
+@router.post("/projects/{project_id}/delegate", status_code=202)
+async def delegate(project_id: str, body: DelegateRequest, service: Service) -> dict:
+    """One agent hands work to a teammate by role."""
+    await _lookup(service, project_id)
+    delivered = await service.deliver(
+        project_id, sender=body.sender, to_role=body.to_role, text=body.text
+    )
+    return {"delivered": delivered}
 
 
 @router.post("/projects/{project_id}/escalations", status_code=202)

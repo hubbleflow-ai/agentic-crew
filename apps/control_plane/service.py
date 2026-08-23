@@ -219,15 +219,51 @@ class CrewService:
     # ─── conversation ────────────────────────────────────────────────────
 
     async def founder_says(self, project_id: str, text: str) -> None:
-        """A follow-up from the founder, delivered to everyone on the project."""
+        """A follow-up from the founder, addressed to the Engineering Manager.
+
+        Addressed, not broadcast. Every founder-facing role acting on every
+        founder message means two agents answering the same question and
+        neither knowing the other did · the EM decides whether this is one for
+        the PM, using the rule in its `scoping-a-request` skill, and hands it
+        over with `delegate_to`.
+        """
+        em = await self._role_address(project_id, FIRST_ROLE)
         await self._emit(
             Event(
                 project_id=project_id,
                 kind=EventKind.FOUNDER_MESSAGE,
                 source="founder",
                 payload={"text": text},
+                to=em,
             )
         )
+
+    async def deliver(
+        self, project_id: str, *, sender: str, to_role: AgentRole, text: str
+    ) -> bool:
+        """One agent hands something to a teammate by role.
+
+        Returns False when nobody holds that role · the caller then knows to
+        spawn one rather than talking into an empty room.
+        """
+        address = await self._role_address(project_id, to_role)
+        if not address:
+            return False
+        await self._emit(
+            Event(
+                project_id=project_id,
+                kind=EventKind.ASSIGNMENT,
+                source=sender,
+                payload={"text": text},
+                to=address,
+            )
+        )
+        return True
+
+    async def _role_address(self, project_id: str, role: AgentRole) -> str:
+        """The bus address of the live agent holding a role, if there is one."""
+        handles = await self._runtime.handles(role, project_id)
+        return f"{role.value}/{handles[0].name}" if handles else ""
 
     async def escalate(
         self,

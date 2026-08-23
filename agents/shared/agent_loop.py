@@ -31,6 +31,10 @@ from contracts.agent_env import SKILLS_ROOT, WORKSPACE, AgentIdentity
 from contracts.events import ACTIONABLE_KINDS, Event, EventKind, channel_for
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    SummarizationMiddleware,
+)
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -47,6 +51,18 @@ IDLE_POLL_S = 5.0
 MAX_HISTORY_MESSAGES = 40
 """Durable memory is the filesystem. The transcript is only continuity, so it
 is bounded rather than grown forever."""
+
+SUMMARIZE_ABOVE_TOKENS = 60_000
+"""When a conversation passes this, older turns are replaced by a summary.
+
+Distinct from the filesystem middleware's eviction, which moves one oversized
+*tool result* to disk. This compresses *conversation*, which eviction cannot
+touch."""
+
+MAX_MODEL_CALLS_PER_TURN = 40
+"""A ceiling on one turn, so a model that has talked itself into a loop costs a
+bounded amount rather than an open-ended one. Reached is a bug to look at, not
+a limit to raise."""
 
 
 # ─── the bus ─────────────────────────────────────────────────────────────
@@ -165,7 +181,21 @@ class Harness:
             tools=tools,
             backend=_backend(),
             skills=_skill_sources(identity.role),
-            middleware=[TelemetryMiddleware(identity, bus)],
+            middleware=[
+                TelemetryMiddleware(identity, bus),
+                # A crew agent lives as long as its project. Without this, a
+                # busy one eventually spends its whole context replaying how
+                # it got here.
+                SummarizationMiddleware(
+                    model=ChatGoogleGenerativeAI(model=identity.model),
+                    trigger=("tokens", SUMMARIZE_ABOVE_TOKENS),
+                    keep=("messages", 20),
+                ),
+                # Nothing else bounds a turn. An agent that keeps calling
+                # tools without converging would otherwise run until the Job's
+                # deadline, spending the whole time.
+                ModelCallLimitMiddleware(thread_limit=MAX_MODEL_CALLS_PER_TURN),
+            ],
         )
         self.tool_names = [getattr(t, "__name__", str(t)) for t in tools]
 

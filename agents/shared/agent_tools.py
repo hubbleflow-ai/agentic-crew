@@ -56,6 +56,9 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "jira_create_issue", "spawn_agent", "escalate_to_founder",
         # Only the EM names the project · it is the role that scopes the work.
         "name_project",
+        # Founder messages arrive addressed to the EM. This is how it hands one
+        # to the PM instead of answering a product question itself.
+        "delegate_to",
     ],
     "product_manager": [
         "read_ticket", "add_ticket_comment",
@@ -191,6 +194,27 @@ def build_role_tools(identity: AgentIdentity) -> list[Callable[..., Any]]:
         limiting for the public API"), not the conversation."""
         return await T.name_project(project_id=project_id, name=name)
 
+    async def delegate_to(role: str, message: str) -> dict:
+        """Hand a question or a piece of work to a teammate already on this
+        project, by role. Use this when the founder asks something the Product
+        Manager should answer rather than you — you receive founder messages
+        first and decide who takes them.
+
+        Returns not_present if nobody holds that role yet; spawn one instead."""
+        result = await T.delegate(
+            project_id=project_id, sender=f"{author}/{agent_id}",
+            to_role=role, text=message,
+        )
+        if not result.get("delivered"):
+            return {
+                "status": "not_present",
+                "message": (
+                    f"No {role} is on this project yet. Spawn one with "
+                    f"spawn_agent and put this in their assignment."
+                ),
+            }
+        return result
+
     async def spawn_agent(role: str, assignment: str = "") -> dict:
         """Add a teammate to this project. role is one of: product_manager,
         backend_engineer, frontend_engineer, qa_engineer, code_reviewer.
@@ -238,6 +262,7 @@ def build_role_tools(identity: AgentIdentity) -> list[Callable[..., Any]]:
         "github_request_changes": github_request_changes,
         "jira_create_issue": jira_create_issue,
         "name_project": name_project,
+        "delegate_to": delegate_to,
         "spawn_agent": spawn_agent,
         "escalate_to_founder": escalate_to_founder,
     }

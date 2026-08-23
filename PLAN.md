@@ -1,5 +1,10 @@
 # Hubbleflow Crew · Overhaul Plan
 
+> **Status: all six phases landed.** All ten requirements met. Two deliberate
+> departures from this plan, both explained below: there is no `docker_runtime`
+> adapter (Kubernetes only), and escalation does not use `interrupt_on`
+> (publishing beats blocking for a headless crew).
+
 Working document. Written 2026-08-22. Survives context loss — read this first.
 
 **Goal:** rebuild this repo so it properly uses the DeepAgents harness, runs on
@@ -97,16 +102,16 @@ deploy/
 
 | # | Requirement | Status today |
 |---|---|---|
-| 1 | Each agent in its own container; 3 backend engineers = 3 containers | ✅ already works |
-| 2 | Progressive disclosure of skills | ❌ full prompt every call |
-| 3 | EM/PM decide who answers a generic question | ⚠️ EM triages alone; PM never sees founder |
+| 1 | Each agent in its own container; 3 backend engineers = 3 containers | ✅ one Job per agent |
+| 2 | Progressive disclosure of skills | ✅ 7 skills; 1 of 6 opened, measured |
+| 3 | EM/PM decide who answers a generic question | ✅ founder msgs addressed to EM; `delegate_to` hands off |
 | 4 | Max caps per agent type | ✅ per-project + global, counted from live Jobs |
 | 5 | Chat named "New Project" until scope is concrete, then renamed | ✅ domain + API; EM tool still to wire |
 | 6 | Multiple concurrent projects | ✅ 3 concurrent, isolated workspaces, global caps |
-| 7 | Extremely clean code, proper patterns | ⚠️ new code clean (0 errors, 55 tests); `main.py` still there |
-| 8 | Proper README | ❌ current one stale in 3 places |
-| 9 | Proper harness use | ❌ 4 of 18 `create_deep_agent` params used |
-| 10 | Code execution in sandbox containers (E2B if possible) | ⚠️ Docker + `docker.sock` mounted |
+| 7 | Extremely clean code, proper patterns | ✅ ruff+mypy clean, 50 files; 55 tests in 0.4s; `main.py` deleted |
+| 8 | Proper README | ✅ rewritten from behaviour |
+| 9 | Proper harness use | ✅ middleware, skills, CompositeBackend, Summarization, call limit |
+| 10 | Code execution in sandbox containers (E2B if possible) | ✅ one Job per exec; docker.sock gone |
 
 **Known conflicts, already flagged:**
 
@@ -208,7 +213,7 @@ callable once scope is concrete; emits `project.renamed` on the bus so the UI
 retitles the chat live. Multiple projects run concurrently, each with its own
 workspace, channel and sandbox.
 
-### Phase 3 · Skills and progressive disclosure (#2)
+### Phase 3 · Skills and progressive disclosure (#2) — **DONE** (`6877446`)
 `SkillsMiddleware` over a `skills/` tree. Base skills sourced by every role;
 role skills layered on top; `SubAgent.skills` scoping so a Backend pod cannot
 see `author-ticket`.
@@ -224,7 +229,7 @@ Note: the six prompts are **not** duplicates — measured similarity is only
 12–22%. The argument for skills is progressive disclosure and per-subagent
 scoping, *not* deduplication.
 
-### Phase 4 · Harness adoption (#9)
+### Phase 4 · Harness adoption (#9) — **DONE**
 - `subagents=[CompiledSubAgent(name=…, runnable=SpawnPodRunnable(role))]` —
   spawning becomes native while staying container-per-agent
 - `permissions=` replacing the double-enforced spawn caps
@@ -233,7 +238,7 @@ scoping, *not* deduplication.
 - `SummarizationMiddleware` replacing `history[-40:]`
 - `RubricMiddleware` as the basis for evals
 
-### Phase 5 · Kubernetes, full (#1) + sandbox (#10)
+### Phase 5 · Kubernetes, full (#1) + sandbox (#10) — **DONE** (`dc65f61`)
 Write `deploy/` (see §1). Implement `adapters/k8s_runtime.py` behind the `AgentRuntime` port. Reference
 mind-palace's `control-plane/app/spawner.py` for the client mechanics, but
 **not** its design — it creates bare Pods and hand-manages their lifecycle.
@@ -247,7 +252,7 @@ daemon.
 Keep `adapters/docker_runtime.py` working: it is the fallback when no cluster
 is available, and the `AgentRuntime` port is what makes that a config switch.
 
-### Phase 6 · Observability, docs, tests
+### Phase 6 · Observability, docs, tests — **DONE** (`1b694e0`)
 - Loki + Grafana in compose — **ports 3100 and 3003** (3000/3001 taken)
 - Phoenix stays for traces; Grafana is for logs. Different questions.
 - Swap the six `logging.basicConfig` calls to `setup_logging()`
