@@ -1,7 +1,7 @@
 """The FastAPI application · assembly only.
 
 Every concrete choice is made here and nowhere else: Kubernetes for the
-runtime, Redis for the bus, memory for the store. Swapping any of them is a
+runtime, Redis for the bus, Redis for the store. Swapping any of them is a
 line in :func:`lifespan`, because everything downstream depends on a port.
 """
 
@@ -13,8 +13,8 @@ from contextlib import asynccontextmanager, suppress
 
 from agents.shared.logging_setup import setup_logging
 from apps.control_plane.adapters.k8s_runtime import KubernetesAgentRuntime
-from apps.control_plane.adapters.memory_store import InMemoryProjectStore
 from apps.control_plane.adapters.redis_events import RedisEventBus
+from apps.control_plane.adapters.redis_store import RedisProjectStore
 from apps.control_plane.api.deps import settings
 from apps.control_plane.api.routes import router
 from apps.control_plane.service import CrewService
@@ -34,8 +34,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await runtime.connect()
     events = RedisEventBus(config["redis_url"])
+    # The same Redis carries the live bus and the durable state. One
+    # dependency, two roles · a restarted control plane rejoins projects it
+    # opened before rather than starting the founder's day again.
+    store = RedisProjectStore(config["redis_url"])
 
-    service = CrewService(store=InMemoryProjectStore(), runtime=runtime, events=events)
+    service = CrewService(store=store, runtime=runtime, events=events)
     app.state.service = service
 
     # One subscriber writing down everything every agent says. Without it the
@@ -55,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await recorder
         await runtime.aclose()
         await events.aclose()
+        await store.aclose()
         log.info("control-plane.stopped")
 
 

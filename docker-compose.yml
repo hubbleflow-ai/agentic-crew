@@ -46,9 +46,15 @@ services:
     ports: ["6006:6006"]
     networks: [crewnet]
 
+  # Redis is both the event bus and the project store, so it is persistent
+  # here as well as in Kubernetes · `docker compose restart` must not lose the
+  # projects. `docker compose down -v` still wipes it, deliberately.
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--dir", "/data"]
     ports: ["6379:6379"]
+    volumes:
+      - crew-redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -179,3 +185,4 @@ networks:
 
 volumes:
   crew-db:
+  crew-redis:

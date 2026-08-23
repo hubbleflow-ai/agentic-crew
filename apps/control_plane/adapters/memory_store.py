@@ -1,11 +1,12 @@
-"""In-memory ProjectStore.
+"""In-memory ProjectStore · the one the tests run against.
 
-Honest about what it is: everything vanishes on restart. That is fine for a
-laptop demo and for tests, and it keeps Postgres out of the critical path while
-the harness itself is what is being taught.
+Everything vanishes on restart, which is exactly what a test wants and exactly
+what a founder does not. The control plane runs on
+:class:`~apps.control_plane.adapters.redis_store.RedisProjectStore`; this one
+exists so the whole service can be assembled in a test in microseconds with no
+server anywhere.
 
-The Postgres adapter that replaces it implements the same port, so nothing
-above this line changes when it arrives.
+Both implement the same port, and the same contract test runs against both.
 """
 
 from __future__ import annotations
@@ -14,9 +15,7 @@ from collections import defaultdict
 
 from apps.control_plane.domain.project import Project
 from apps.control_plane.ports.events import Event
-
-MAX_HISTORY_PER_PROJECT = 1000
-"""A demo left running should not grow without limit."""
+from apps.control_plane.ports.store import MAX_HISTORY_PER_PROJECT
 
 
 class InMemoryProjectStore:
@@ -56,3 +55,6 @@ class InMemoryProjectStore:
 
     async def history(self, project_id: str, *, limit: int = 200) -> list[Event]:
         return self._events[project_id][-limit:]
+
+    async def aclose(self) -> None:
+        """Nothing is held open · here to satisfy the port."""

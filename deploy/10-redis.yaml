@@ -1,9 +1,25 @@
-# Redis carries the live event stream and directed messages between agents.
+# Redis carries two things: the live event stream between agents, and the
+# projects themselves.
 #
-# Nothing durable lives here. If this pod is lost, an in-flight turn is lost
-# with it; the project's history is in the store and the work is on the volume.
-# That is why there is no PVC and no replication -- treating it as disposable
-# is a design decision, not an omission.
+# It used to carry only the first, and ran with `--save "" --appendonly no`
+# because losing an in-flight turn was acceptable. Once project names, statuses
+# and transcripts moved here (see adapters/redis_store.py) that stopped being
+# true: a rescheduled pod would have handed the founder an empty console.
+# Hence the append-only file and the volume below. A Redis that forgets is a
+# perfectly good bus and a useless store.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: crew
+spec:
+  accessModes:
+    - ReadWriteOnce   # one writer · Redis is a single process by design
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,18 +28,38 @@ metadata:
   labels: {app: redis}
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate. A ReadWriteOnce claim can only be mounted by
+  # one node at a time, so a rolling update leaves the new pod stuck in
+  # ContainerCreating while the old one holds the volume, forever.
+  strategy: {type: Recreate}
   selector:
     matchLabels: {app: redis}
   template:
     metadata:
       labels: {app: redis}
     spec:
-      securityContext: {runAsNonRoot: true, runAsUser: 999}
+      # fsGroup, or the mounted volume is root-owned and a non-root Redis
+      # cannot write its AOF -- which shows up as a crash loop on first boot,
+      # not as a permissions error anyone can read.
+      securityContext: {runAsNonRoot: true, runAsUser: 999, fsGroup: 999}
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["redis-server", "--save", "", "--appendonly", "no"]
+          # everysec, not always: an fsync per write would put a disk round
+          # trip in front of every tool call an agent makes. The exposure is
+          # up to one second of events on a hard kill, and those events were
+          # also delivered live to anyone watching.
+          args:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --dir
+            - /data
           ports: [{containerPort: 6379, name: redis}]
+          volumeMounts:
+            - {name: data, mountPath: /data}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 500m, memory: 256Mi}
@@ -34,6 +70,9 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: redis-data}
 ---
 apiVersion: v1
 kind: Service

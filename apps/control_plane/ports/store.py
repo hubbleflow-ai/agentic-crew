@@ -13,6 +13,14 @@ from typing import Protocol, runtime_checkable
 from apps.control_plane.domain.project import Project
 from apps.control_plane.ports.events import Event
 
+MAX_HISTORY_PER_PROJECT = 1000
+"""How many events a project keeps.
+
+Part of the contract rather than one adapter's detail: a founder reopening a
+project must see the same tail whichever store is behind it, and a demo left
+running overnight must not grow without limit.
+"""
+
 
 @runtime_checkable
 class ProjectStore(Protocol):
@@ -42,4 +50,10 @@ class ProjectStore(Protocol):
         """
         ...
 
-    async def history(self, project_id: str, *, limit: int = 200) -> list[Event]: ...
+    async def history(self, project_id: str, *, limit: int = 200) -> list[Event]:
+        """The tail of a project's events, oldest first."""
+        ...
+
+    async def aclose(self) -> None:
+        """Release whatever the adapter holds open. Idempotent."""
+        ...

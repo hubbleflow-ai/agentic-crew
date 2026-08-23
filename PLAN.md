@@ -154,7 +154,7 @@ ports/      one-line contracts saying WHAT is needed, never HOW
 
 adapters/   the implementations of those contracts
             k8s_runtime (Jobs) · fake_runtime (tests) · redis_events
-            memory_store · e2b_sandbox (later)
+            redis_store · memory_store (tests) · e2b_sandbox (later)
 
 api/        FastAPI routes and nothing else — they call domain functions
             and never touch Kubernetes
@@ -190,8 +190,8 @@ rather than a rewrite. Also: replace the hand-rolled event walk in
   "running". Kubernetes also never fails those on its own.
 - A crashed pod is **not** terminal while the Job has retries left. Only the
   Job's `Failed` condition ends an agent.
-- Store is `InMemoryProjectStore` for now. The Postgres adapter is a port
-  implementation away; nothing above it changes.
+- Store *was* `InMemoryProjectStore`. It is now `RedisProjectStore` — see
+  §9. Nothing above the port changed, which was the claim being tested.
 
 **Verified on the cluster, not just typed** (`kubectl` transcript in commit
 `cf90c4d`): healthy agent → `succeeded`; failing agent → 3 attempts →
@@ -392,3 +392,45 @@ base grows past 4096 tokens — and only if that content earns its place.
   Un-gated in `docker-compose.override.yml`.
 - Prior successful runs left real output in `workspace/task-679e71a1/`
   (56 files: PRD, backend, tests, frontend) — proof the crew works.
+
+---
+
+## 9 · Project state moved to Redis
+
+The last thing left in memory was the projects themselves: a control-plane
+restart forgot every project name and every transcript, while the agents kept
+running in the cluster. A founder would have come back to an empty console and
+a crew still working.
+
+**Redis, not Postgres.** The plan said Postgres, and the requirements file
+still carries `sqlalchemy` and `asyncpg` for it. But the control plane already
+cannot start without Redis — the event bus is there — and the state it keeps is
+three keys, no joins, no schema, no migration step. Postgres would have been a
+second stateful dependency bought for nothing. It stays available behind the
+port if the state ever grows a shape that wants SQL.
+
+**Durability is the server's job, not the adapter's.** Redis ran with
+`--save "" --appendonly no` because it was only a bus, and moving state into it
+unchanged would have been the same amnesia with extra hops. `deploy/10-redis.yaml`
+now has an append-only file (`everysec`), a 1Gi PVC, `fsGroup: 999` so a
+non-root Redis can write it, and `strategy: Recreate` — a rolling update against
+a ReadWriteOnce claim leaves the new pod waiting on a volume the old one will
+never release.
+
+**Layout**, readable with `redis-cli` while a demo runs:
+
+```
+crew:project:<id>            JSON · one project
+crew:projects:active         sorted set · id → created_at, newest first
+crew:project:<id>:history    list · JSON events, oldest first, capped at 1000
+```
+
+Active projects are an index, not a scan: `list_active` is on the path of every
+new project because it enforces the concurrency cap, and `SCAN` there is what
+makes a service slow six months later.
+
+**Tested against a real server.** `tests/test_project_store.py` runs one
+contract suite twice — once against memory, once against Redis — and skips the
+Redis half when no server answers. Plus the test the move exists for: write
+through one adapter instance, read through a second, which is what a restarted
+control plane is.
