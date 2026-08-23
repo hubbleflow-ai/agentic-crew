@@ -30,6 +30,7 @@ from apps.control_plane.ports.runtime import (
     AgentState,
     AgentStatus,
 )
+from contracts import agent_env
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.exceptions import ApiException
 
@@ -328,9 +329,10 @@ class KubernetesAgentRuntime:
                                 "image": self.image,
                                 "imagePullPolicy": self.image_pull_policy,
                                 "env": [
-                                    {"name": "AGENT_ROLE", "value": spec.role.value},
-                                    {"name": "PROJECT_ID", "value": spec.project_id},
-                                    {"name": "ASSIGNMENT", "value": spec.assignment},
+                                    {"name": agent_env.ROLE, "value": spec.role.value},
+                                    {"name": agent_env.PROJECT_ID, "value": spec.project_id},
+                                    {"name": agent_env.AGENT_NAME, "value": name},
+                                    {"name": agent_env.ASSIGNMENT, "value": spec.assignment},
                                 ],
                                 # Keys and endpoints arrive from cluster objects,
                                 # never copied out of the control plane's own env.
@@ -341,7 +343,7 @@ class KubernetesAgentRuntime:
                                 "volumeMounts": [
                                     {
                                         "name": "workspace",
-                                        "mountPath": "/workspace",
+                                        "mountPath": agent_env.WORKSPACE,
                                         "subPath": spec.project_id,
                                     }
                                 ],

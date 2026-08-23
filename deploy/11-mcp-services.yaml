@@ -1,0 +1,260 @@
+# The MCP services · each one a capability the crew can reach over HTTP.
+#
+# They are stand-ins for real SaaS, and that is the point: an agent calling
+# `github_open_pr` cannot tell the difference, so the harness lesson does not
+# depend on anyone holding a GitHub token.
+#
+# All five are structurally identical -- Deployment plus Service, no storage,
+# no cluster permissions. Only mcp-browser differs, because Chromium is a
+# gigabyte nothing else needs.
+---
+# The one ticket per project · the crew's source of truth for scope.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-tickets
+  namespace: crew
+  labels: {app: mcp-tickets}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-tickets}
+  template:
+    metadata:
+      labels: {app: mcp-tickets}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+        - name: server
+          image: crew-base:dev
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "mocks.mcp_tickets.main:app", "--host", "0.0.0.0", "--port", "9001"]
+          ports: [{containerPort: 9001, name: http}]
+          envFrom:
+            - configMapRef: {name: crew-config}
+            - secretRef: {name: crew-secrets}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: crew-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-tickets
+  namespace: crew
+spec:
+  selector: {app: mcp-tickets}
+  ports: [{port: 9001, targetPort: http}]
+---
+# Pull requests, reviews and comments.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-github
+  namespace: crew
+  labels: {app: mcp-github}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-github}
+  template:
+    metadata:
+      labels: {app: mcp-github}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+        - name: server
+          image: crew-base:dev
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "mocks.mcp_github.main:app", "--host", "0.0.0.0", "--port", "9002"]
+          ports: [{containerPort: 9002, name: http}]
+          envFrom:
+            - configMapRef: {name: crew-config}
+            - secretRef: {name: crew-secrets}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: crew-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-github
+  namespace: crew
+spec:
+  selector: {app: mcp-github}
+  ports: [{port: 9002, targetPort: http}]
+---
+# Runs agent-written code. See ADR: execution happens in a Job, not here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-sandbox
+  namespace: crew
+  labels: {app: mcp-sandbox}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-sandbox}
+  template:
+    metadata:
+      labels: {app: mcp-sandbox}
+    spec:
+      serviceAccountName: crew-sandbox
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+        - name: server
+          image: crew-base:dev
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "mocks.mcp_sandbox.main:app", "--host", "0.0.0.0", "--port", "9003"]
+          ports: [{containerPort: 9003, name: http}]
+          envFrom:
+            - configMapRef: {name: crew-config}
+            - secretRef: {name: crew-secrets}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: crew-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-sandbox
+  namespace: crew
+spec:
+  selector: {app: mcp-sandbox}
+  ports: [{port: 9003, targetPort: http}]
+---
+# A real headless Chromium, for the PM's evidence trail.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-browser
+  namespace: crew
+  labels: {app: mcp-browser}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-browser}
+  template:
+    metadata:
+      labels: {app: mcp-browser}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+        - name: server
+          image: crew-browser:dev
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "mocks.mcp_browser.main:app", "--host", "0.0.0.0", "--port", "9004"]
+          ports: [{containerPort: 9004, name: http}]
+          envFrom:
+            - configMapRef: {name: crew-config}
+            - secretRef: {name: crew-secrets}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 2, memory: 2Gi}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: crew-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-browser
+  namespace: crew
+spec:
+  selector: {app: mcp-browser}
+  ports: [{port: 9004, targetPort: http}]
+---
+# Follow-up issues for work that is out of scope.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-jira
+  namespace: crew
+  labels: {app: mcp-jira}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-jira}
+  template:
+    metadata:
+      labels: {app: mcp-jira}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+        - name: server
+          image: crew-base:dev
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "mocks.mcp_jira.main:app", "--host", "0.0.0.0", "--port", "9005"]
+          ports: [{containerPort: 9005, name: http}]
+          envFrom:
+            - configMapRef: {name: crew-config}
+            - secretRef: {name: crew-secrets}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: crew-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-jira
+  namespace: crew
+spec:
+  selector: {app: mcp-jira}
+  ports: [{port: 9005, targetPort: http}]

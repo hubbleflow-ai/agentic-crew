@@ -37,6 +37,12 @@ class MessageRequest(BaseModel):
     text: str = Field(min_length=1)
 
 
+class EscalationRequest(BaseModel):
+    question: str = Field(min_length=1)
+    context: str = ""
+    options: list[str] = Field(default_factory=list)
+
+
 class ProjectView(BaseModel):
     id: str
     name: str

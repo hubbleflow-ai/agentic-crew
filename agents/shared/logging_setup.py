@@ -36,8 +36,11 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-_CONTEXT: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar(
-    "log_context", default={}
+# The default is None rather than {} · a mutable default on a ContextVar is a
+# single shared object, so one request mutating it in place would leak its
+# fields into every other. Readers substitute an empty dict.
+_CONTEXT: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "log_context", default=None
 )
 
 # Fields the stdlib puts on every record. Anything else the caller passed via
@@ -54,7 +57,7 @@ def bind_context(**fields: str) -> None:
 
         bind_context(service="backend_engineer", agent_id=..., task_id=...)
     """
-    merged = {**_CONTEXT.get(), **{k: str(v) for k, v in fields.items() if v}}
+    merged = {**(_CONTEXT.get() or {}), **{k: str(v) for k, v in fields.items() if v}}
     _CONTEXT.set(merged)
 
 
@@ -68,7 +71,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            **_CONTEXT.get(),
+            **(_CONTEXT.get() or {}),
         }
         extras = {k: v for k, v in record.__dict__.items() if k not in _STDLIB_ATTRS}
         if extras:
@@ -107,7 +110,7 @@ class LokiHandler(logging.Handler):
         # Logging must never raise into the caller.
         with contextlib.suppress(Exception):
             line = self.format(record)
-            ctx = {**_CONTEXT.get(), "level": record.levelname}
+            ctx = {**(_CONTEXT.get() or {}), "level": record.levelname}
             labels = {k: ctx[k] for k in self._LABEL_KEYS if ctx.get(k)}
             labels.setdefault("service", record.name)
             self._queue.put_nowait((labels, str(time.time_ns()), line))

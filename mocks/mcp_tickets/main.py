@@ -8,7 +8,7 @@ Endpoints:
 
     POST /tickets                · create or update a ticket
     GET  /tickets/{ticket_id}    · read a ticket
-    GET  /tickets                · list (optionally filter by task_id)
+    GET  /tickets                · list (optionally filter by project_id)
     POST /tickets/{ticket_id}/comments · append a comment
 """
 
@@ -30,7 +30,7 @@ _tickets: dict[str, dict[str, Any]] = {}
 
 
 class TicketBody(BaseModel):
-    task_id: str
+    project_id: str
     title: str
     api_contract: str = ""
     acceptance_criteria: list[str] = []
@@ -40,16 +40,16 @@ class TicketBody(BaseModel):
 
 
 @app.get("/health")
-def health():
+def health() -> dict:
     return {"status": "ok", "ticket_count": len(_tickets)}
 
 
 @app.post("/tickets")
 def write_ticket(body: TicketBody) -> dict:
-    ticket_id = f"TICKET-{body.task_id.split('-')[-1].upper()}"
+    ticket_id = f"TICKET-{body.project_id.split('-')[-1].upper()}"
     _tickets[ticket_id] = {
         "ticket_id": ticket_id,
-        "task_id": body.task_id,
+        "project_id": body.project_id,
         "title": body.title,
         "api_contract": body.api_contract,
         "acceptance_criteria": body.acceptance_criteria,
@@ -72,10 +72,10 @@ def read_ticket(ticket_id: str) -> dict:
 
 
 @app.get("/tickets")
-def list_tickets(task_id: str | None = None) -> list[dict]:
+def list_tickets(project_id: str | None = None) -> list[dict]:
     items = list(_tickets.values())
-    if task_id:
-        items = [t for t in items if t["task_id"] == task_id]
+    if project_id:
+        items = [t for t in items if t["project_id"] == project_id]
     return items
 
 
@@ -95,3 +95,10 @@ def add_comment(ticket_id: str, comment: CommentBody) -> dict:
     }
     _tickets[ticket_id].setdefault("comments", []).append(entry)
     return entry
+
+
+if __name__ == "__main__":
+    # Run this service on its own, under a debugger, without the cluster.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=9001)

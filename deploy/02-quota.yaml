@@ -11,12 +11,21 @@ metadata:
   namespace: crew
 spec:
   hard:
-    # 3 projects x roughly 10 agents, plus the platform pods.
     pods: "40"
-    requests.cpu: "6"
-    requests.memory: 10Gi
-    limits.cpu: "12"
-    limits.memory: 20Gi
+
+    # `requests` is what the scheduler actually reserves, so this is the real
+    # constraint on a 10-CPU node. Keep it tight.
+    requests.cpu: "8"
+    requests.memory: 12Gi
+
+    # `limits` is only a ceiling -- a pod that asks for a 1-CPU limit and then
+    # idles still spends that against the quota. Sizing this like `requests`
+    # is what starved Phoenix: the platform had reserved 11.5 of 12 CPU of
+    # *ceiling* while using almost none of it, and there was no room left to
+    # create anything. Over-commit deliberately.
+    limits.cpu: "32"
+    limits.memory: 32Gi
+
     persistentvolumeclaims: "4"
 ---
 # A pod with no limits can eat the node. This makes the defaults explicit for

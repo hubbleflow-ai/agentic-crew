@@ -13,6 +13,7 @@ from typing import Annotated
 
 from apps.control_plane.api.deps import get_service
 from apps.control_plane.api.schemas import (
+    EscalationRequest,
     EventView,
     MessageRequest,
     OpenProjectRequest,
@@ -96,6 +97,28 @@ async def post_message(project_id: str, body: MessageRequest, service: Service) 
     await _lookup(service, project_id)
     await service.founder_says(project_id, body.text)
     return {"accepted": True}
+
+
+@router.post("/projects/{project_id}/escalations", status_code=202)
+async def escalate(project_id: str, body: EscalationRequest, service: Service) -> dict:
+    """An agent hands a decision to the founder.
+
+    Acknowledged immediately and deliberately non-blocking · a headless run
+    with nobody watching must not deadlock a whole crew on a question that
+    will never be answered. The founder's reply, if it comes, arrives later as
+    an ordinary message on the project.
+    """
+    await _lookup(service, project_id)
+    await service.escalate(
+        project_id, question=body.question, context=body.context, options=body.options
+    )
+    return {
+        "acknowledged": True,
+        "guidance": (
+            "Raised with the founder. If no answer arrives, proceed on your best "
+            "judgement and record the assumption in the ticket."
+        ),
+    }
 
 
 @router.get("/projects/{project_id}/events", response_model=list[EventView])

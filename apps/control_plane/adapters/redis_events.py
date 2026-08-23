@@ -18,7 +18,7 @@ from typing import Any
 
 import redis.asyncio as redis
 from agents.shared.logging_setup import setup_logging
-from apps.control_plane.ports.events import Event, EventKind
+from contracts.events import ALL_PROJECTS_PATTERN, Event, EventKind, channel_for
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 log = setup_logging("redis-events")
@@ -26,10 +26,6 @@ log = setup_logging("redis-events")
 IDLE_TIMEOUT_S = 5.0
 """How long a read waits before looping. Not a disconnect · a quiet project is
 the normal case while a model is thinking."""
-
-
-def channel_for(project_id: str) -> str:
-    return f"crew/project/{project_id}/events"
 
 
 class RedisEventBus:
@@ -68,6 +64,31 @@ class RedisEventBus:
             await pubsub.aclose()
             log.info("event.unsubscribed project_id=%s", project_id)
 
+    async def subscribe_all(self) -> AsyncIterator[Event]:
+        """Every project's events, on one pattern subscription.
+
+        One subscriber rather than one per project · projects come and go, and
+        a per-project task would have to be started and stopped in step with
+        them.
+        """
+        pubsub = self._redis.pubsub()
+        await pubsub.psubscribe(ALL_PROJECTS_PATTERN)
+        log.info("event.recording pattern=%s", ALL_PROJECTS_PATTERN)
+        try:
+            while True:
+                try:
+                    raw = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=IDLE_TIMEOUT_S
+                    )
+                except RedisTimeoutError:
+                    continue
+                if raw is None or raw.get("type") != "pmessage":
+                    continue
+                yield _decode(raw["data"])
+        finally:
+            await pubsub.punsubscribe(ALL_PROJECTS_PATTERN)
+            await pubsub.aclose()
+
     async def aclose(self) -> None:
         await self._redis.aclose()
 
@@ -80,4 +101,5 @@ def _decode(data: Any) -> Event:
         source=payload["source"],
         payload=payload.get("payload", {}),
         at=payload["at"],
+        to=payload.get("to", ""),
     )

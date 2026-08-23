@@ -11,5 +11,7 @@ data:
   # In-cluster service names · agents never hold a hostname of their own.
   CONTROL_PLANE_URL: "http://control-plane.crew.svc.cluster.local:8000"
   LOKI_URL: "http://loki.crew.svc.cluster.local:3100"
-  # Phoenix runs on the developer's laptop while teaching.
-  PHOENIX_COLLECTOR_ENDPOINT: "http://host.minikube.internal:6007"
+  # Phoenix runs in the cluster. It used to point at the developer's laptop,
+  # which worked until the laptop slept · an agent whose collector is
+  # unreachable does not fail, it stalls on export retries.
+  PHOENIX_COLLECTOR_ENDPOINT: "http://phoenix.crew.svc.cluster.local:6006"

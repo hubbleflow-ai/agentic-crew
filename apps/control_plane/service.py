@@ -229,6 +229,29 @@ class CrewService:
             )
         )
 
+    async def escalate(
+        self,
+        project_id: str,
+        *,
+        question: str,
+        context: str = "",
+        options: list[str] | None = None,
+    ) -> None:
+        """Surface an agent's decision to the founder."""
+        log.info("escalation.raised project_id=%s q=%s", project_id, question[:80])
+        await self._emit(
+            Event(
+                project_id=project_id,
+                kind=EventKind.ESCALATION,
+                source="control-plane",
+                payload={
+                    "question": question,
+                    "context": context,
+                    "options": options or [],
+                },
+            )
+        )
+
     async def history(self, project_id: str, *, limit: int = 200) -> list[Event]:
         return await self._store.history(project_id, limit=limit)
 
@@ -245,10 +268,25 @@ class CrewService:
         return project
 
     async def _emit(self, event: Event) -> None:
-        """Publish for live watchers and record for later replay.
+        """Publish onto the bus. Recording is somebody else's job.
 
-        Both, always · a project a founder reopens tomorrow should read the
-        same as the one they watched today.
+        Deliberately not written to the store here. Agents publish from inside
+        their own pods and cannot reach the store at all, so if each publisher
+        also recorded, the history would hold control-plane events and nothing
+        else. :meth:`record` is the single writer, and it sees both.
         """
-        await self._store.append_event(event)
         await self._events.publish(event)
+
+    async def record(self) -> None:
+        """Write every event on the bus into the store. Runs forever.
+
+        Started once at boot. This is what makes a project a founder reopens
+        tomorrow read the same as the one they watched today.
+        """
+        async for event in self._events.subscribe_all():
+            try:
+                await self._store.append_event(event)
+            except Exception:
+                # A history gap is bad; a recorder that dies and leaves every
+                # later event unrecorded is worse.
+                log.exception("recorder.append_failed project_id=%s", event.project_id)

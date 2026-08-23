@@ -11,8 +11,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-class SilentBus:
-    async def publish(self, event: Event) -> None: ...
+class RecordingBus:
+    """Bus plus recorder · see tests/test_service.py for why they are one here."""
+
+    def __init__(self, store: InMemoryProjectStore) -> None:
+        self._store = store
+
+    async def publish(self, event: Event) -> None:
+        await self._store.append_event(event)
+
     def subscribe(self, project_id: str):  # noqa: ANN201
         raise NotImplementedError
 
@@ -22,8 +29,9 @@ def client() -> TestClient:
     """The real app minus its lifespan · this is what the ports bought us."""
     app = FastAPI()
     app.include_router(router)
+    store = InMemoryProjectStore()
     app.state.service = CrewService(
-        store=InMemoryProjectStore(), runtime=FakeAgentRuntime(), events=SilentBus()
+        store=store, runtime=FakeAgentRuntime(), events=RecordingBus(store)
     )
     return TestClient(app)
 

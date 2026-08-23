@@ -56,7 +56,18 @@ def setup_observability(service_name: str) -> None:
             endpoint=f"{collector}/v1/traces",
             resource=Resource.create({"service.name": f"crew/{service_name}"}),
             set_global_tracer_provider=True,
+            # Batch, never simple. A SimpleSpanProcessor exports on the
+            # calling thread, so when the collector is unreachable every span
+            # blocks for the full retry ladder -- roughly seven seconds each.
+            # An agent traced that way does not fail; it just stops, which is
+            # far harder to diagnose than a crash.
+            batch=True,
         )
+        # The exporter logs a warning per failed attempt. When the collector
+        # is down that is dozens a second, and it buries everything the agent
+        # says. One line at ERROR is enough to notice.
+        logging.getLogger("opentelemetry.exporter.otlp").setLevel(logging.ERROR)
+
         LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
         HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
         log.info(

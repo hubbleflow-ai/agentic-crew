@@ -7,8 +7,9 @@ line in :func:`lifespan`, because everything downstream depends on a port.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from agents.shared.logging_setup import setup_logging
 from apps.control_plane.adapters.k8s_runtime import KubernetesAgentRuntime
@@ -34,9 +35,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await runtime.connect()
     events = RedisEventBus(config["redis_url"])
 
-    app.state.service = CrewService(
-        store=InMemoryProjectStore(), runtime=runtime, events=events
-    )
+    service = CrewService(store=InMemoryProjectStore(), runtime=runtime, events=events)
+    app.state.service = service
+
+    # One subscriber writing down everything every agent says. Without it the
+    # only recorded history is what this process itself emitted.
+    recorder = asyncio.create_task(service.record())
     log.info(
         "control-plane.ready namespace=%s image=%s",
         config["namespace"],
@@ -46,6 +50,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        recorder.cancel()
+        with suppress(asyncio.CancelledError):
+            await recorder
         await runtime.aclose()
         await events.aclose()
         log.info("control-plane.stopped")

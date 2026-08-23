@@ -117,7 +117,7 @@ class RequestChanges(BaseModel):
 
 
 @app.get("/health")
-def health():
+def health() -> dict:
     return {"status": "ok", "files": len(_files), "prs": len(_prs)}
 
 
@@ -198,3 +198,10 @@ def read_pr(pr_number: int) -> dict:
     if not pr:
         raise HTTPException(404, "pr not found")
     return pr
+
+
+if __name__ == "__main__":
+    # Run this service on its own, under a debugger, without the cluster.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=9002)

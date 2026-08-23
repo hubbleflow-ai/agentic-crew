@@ -18,6 +18,15 @@ metadata:
   name: crew-agent
   namespace: crew
 ---
+# The sandbox service creates one throwaway Job per command. It gets its own
+# identity rather than borrowing the control plane's, so a bug there cannot
+# spawn agents -- only sandboxes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crew-sandbox
+  namespace: crew
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -49,6 +58,23 @@ subjects:
     name: crew-control-plane
     namespace: crew
 roleRef:
+  kind: Role
+  name: crew-agent-launcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crew-sandbox-launcher
+  namespace: crew
+subjects:
+  - kind: ServiceAccount
+    name: crew-sandbox
+    namespace: crew
+roleRef:
+  # Deliberately the same Role. Both services need exactly "create Jobs and
+  # read their output"; inventing a near-identical second Role would mean two
+  # things to keep in step.
   kind: Role
   name: crew-agent-launcher
   apiGroup: rbac.authorization.k8s.io

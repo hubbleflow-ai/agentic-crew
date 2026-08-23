@@ -53,7 +53,7 @@ class Transition(BaseModel):
 
 
 @app.get("/health")
-def health():
+def health() -> dict:
     return {"status": "ok", "issue_count": len(_issues)}
 
 
@@ -116,3 +116,10 @@ def transition(key: str, req: Transition) -> dict:
     issue["status"] = req.new_status
     issue["transitioned_at"] = time.time()
     return issue
+
+
+if __name__ == "__main__":
+    # Run this service on its own, under a debugger, without the cluster.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=9005)

@@ -12,13 +12,21 @@ from apps.control_plane.service import CapExceeded, CrewService
 
 
 class RecordingBus:
-    """Captures what a founder would have seen."""
+    """A bus with the recorder already attached.
 
-    def __init__(self) -> None:
+    In production those are two pieces: agents publish onto Redis, and one
+    subscriber in the control plane writes what it hears into the store. Here
+    they collapse into one synchronous object, so a test sees the same end
+    state without running a background task.
+    """
+
+    def __init__(self, store: InMemoryProjectStore) -> None:
         self.events: list[Event] = []
+        self._store = store
 
     async def publish(self, event: Event) -> None:
         self.events.append(event)
+        await self._store.append_event(event)  # what record() does
 
     def subscribe(self, project_id: str):  # noqa: ANN201 · unused by these tests
         raise NotImplementedError
@@ -39,7 +47,8 @@ class Crew:
 
 @pytest.fixture
 def crew() -> Crew:
-    store, runtime, bus = InMemoryProjectStore(), FakeAgentRuntime(), RecordingBus()
+    store = InMemoryProjectStore()
+    runtime, bus = FakeAgentRuntime(), RecordingBus(store)
     return Crew(
         service=CrewService(store=store, runtime=runtime, events=bus),
         runtime=runtime,

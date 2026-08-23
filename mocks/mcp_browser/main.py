@@ -36,7 +36,8 @@ import logging
 import os
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -77,10 +78,10 @@ class BrowserManager:
 
     async def shutdown(self) -> None:
         for ctx in self._contexts.values():
-            try:
+            # A context whose page already died raises on close · we are
+            # shutting down either way.
+            with suppress(Exception):
                 await ctx.close()
-            except Exception:
-                pass
         if self._browser:
             await self._browser.close()
         if self._playwright:
@@ -88,6 +89,8 @@ class BrowserManager:
         log.info("browser.shutdown")
 
     async def _get_context(self, agent_id: str) -> BrowserContext:
+        if self._browser is None:
+            raise HTTPException(503, "browser is still starting")
         if agent_id not in self._contexts:
             self._contexts[agent_id] = await self._browser.new_context(
                 viewport={"width": 1280, "height": 720},
@@ -130,19 +133,19 @@ class BrowserManager:
         screenshot_id = f"evidence-{secrets.token_hex(3)}"
         # Save under /workspace so the UI can render via the same shared volume
         rel_path = f"evidence/{agent_id}/{screenshot_id}.png"
-        abs_path = f"/workspace/{rel_path}"
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        abs_path = Path("/workspace") / rel_path
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             log.info("browser.screenshot agent=%s id=%s url=%s",
                      agent_id, screenshot_id, url)
             await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            await page.screenshot(path=abs_path, full_page=True)
+            await page.screenshot(path=str(abs_path), full_page=True)
             title = await page.title()
         except Exception as e:
             log.warning("browser.screenshot_failed url=%s err=%s", url, e)
             await page.close()
-            raise HTTPException(500, f"screenshot failed: {e}")
+            raise HTTPException(500, f"screenshot failed: {e}") from e
         finally:
             await page.close()
 
@@ -174,7 +177,7 @@ _manager = BrowserManager()
 # ─── lifespan ────────────────────────────────────────────────────────────
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     await _manager.startup()
     yield
     await _manager.shutdown()
@@ -201,7 +204,7 @@ class ScreenshotAndAnnotate(BaseModel):
 # ─── routes ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
-def health():
+def health() -> dict:
     return {
         "status": "ok",
         "active_contexts": len(_manager._contexts),
@@ -234,3 +237,10 @@ async def list_evidence(agent_id: str) -> dict:
 async def close_agent(agent_id: str) -> dict:
     await _manager.close_agent(agent_id)
     return {"agent_id": agent_id, "closed": True}
+
+
+if __name__ == "__main__":
+    # Run this service on its own, under a debugger, without the cluster.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=9004)
