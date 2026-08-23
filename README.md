@@ -1,96 +1,287 @@
-# Hubbleflow Crew · Agentic AI Engineering Team
+# Agentic Crew
 
-An autonomous engineering team you compose container by container. Spawn
-specialists. Watch them collaborate. Each in its own Docker sandbox with
-its own memory. Built on DeepAgents (LangChain) + Gemini + Sandboxes + Browser Use.
+An autonomous engineering team. A founder describes what they want; an
+Engineering Manager scopes it, names the project, and pulls in whoever it
+needs. Every agent runs in its own Kubernetes pod.
 
-Target audience: software engineers, technical founders, CTOs.
+It is also the worked example for a single idea:
 
-## What's in this folder
+> **An agent is a model plus a harness.** The model supplies judgement. The
+> operating system has supplied capability for fifty years. A harness is the
+> wiring between them — and it is built out of middleware.
 
-| File | What it is |
-|---|---|
-| `PRODUCT_SPEC.md` | Full product specification · the design doc. Read this first. |
-| `PRODUCT_SPEC.html` | Same spec, styled HTML with TOC, tables, callouts. Open in browser. |
-| `ui-mockup.html` | Live visual prototype of the operator console. Open in browser. |
+If you want the idea before the code, start at
+[`notebooks/01_what_a_harness_is.ipynb`](notebooks/).
 
-## Project status
+---
 
-**Build phase · in progress.** Spec + UI mockup + initial scaffolding
-done. Hybrid integration (Option B) locked: `mcp-sandbox` and
-`mcp-browser` use real Docker exec + real Playwright Chromium.
-`mcp-tickets`, `mcp-github`, `mcp-jira` stay as in-memory mocks for
-demo reliability (no OAuth flakiness).
-
-**Backend now runs end-to-end (headless).** Wired up:
-- Full roster of 6 agents · EM, PM, Backend, **Frontend**, **QA**, Reviewer.
-- Control plane auto-spawns the EM on `POST /tasks` and delivers the
-  Founder's request via a race-free bootstrap env (not lossy pub/sub).
-- The EM has real `spawn_agent` + `escalate_to_founder` tools, so it
-  actually assembles the team and raises HITL gates (`POST /escalations`).
-- EM→worker assignments ride the same race-free bootstrap mechanism.
-- Role→module mapping fixed (canonical role names → agent dirs).
-
-**Operator console is built.** `apps/web/` is now a working Next.js app
-that faithfully ports `ui-mockup.html` and drives it with live data:
-- Submit a task from the chat → control plane spawns the crew.
-- Live agent tabs (one per container) with real status dots; click any
-  to watch its workspace render code edits, terminal runs, browser
-  research, tickets, and reasoning from the WebSocket event stream.
-- Real KPIs (pods, elapsed, tokens, cost) — backed by `usage` events.
-- Footer **+ Spawn agent** really spawns a container (cap-enforced);
-  chat input sends founder messages / answers escalations to the crew.
-
-Run the UI with `docker compose --profile ui up --build` (it's behind
-the `ui` profile so a plain `docker compose up` still skips it).
-
-Updated build budget: ~22 focused hours total.
-
-## To run (when ready)
+## Running it
 
 ```bash
-# 1. Set up env
-cp .env.example .env
-# Edit .env · set GOOGLE_API_KEY (Gemini, Google AI Studio)
-
-# 2. Build both images (agent + sandbox)
-./scripts/build-images.sh
-
-# 3. Boot the stack
-docker compose up
-
-# 4. Open the UI
-open http://localhost:3000
+cp .env.example .env          # add GOOGLE_API_KEY
+minikube start
+./scripts/deploy.sh
 ```
 
-## Quick context for newcomers
+Then, in another terminal:
 
-For Session 7 of the Agentic AI Mastery cohort, we wanted to showcase
-truly autonomous agents (Manus / Cognition class) using Claude SDK +
-Sandboxes + Browser Use. After extensive exploration of variants
-(incident response, observability detection, investment research,
-autonomous SRE), we landed on the cleanest, most demoable form:
+```bash
+kubectl port-forward -n crew svc/control-plane 8000:8000
+```
 
-**Crew · a platform where the Founder/CTO spawns AI engineering
-specialists on demand to build features end-to-end.**
+```bash
+curl -X POST localhost:8000/projects \
+     -H 'content-type: application/json' \
+     -d '{"request":"Add a /healthz endpoint to the payments service."}'
+```
 
-Each agent is a real Docker container with its own:
-- DeepAgents (LangChain) loop on Gemini
-- System prompt for its role
-- Tool catalogue (MCP servers)
-- Sandbox for code execution
-- Browser (Chromium) where relevant
-- Memory volume
+```json
+{"id": "proj-5fcc0a58", "name": "New Project", "status": "running", "is_named": false}
+```
 
-They collaborate via Redis pub/sub + a shared workspace volume. The
-human (Founder) is the supervisor · approves the plan, policy decisions,
-final PRs, deploys.
+The project is called **New Project** because nobody knows yet what it is. A
+minute later the EM has read the request and renamed it:
 
-**Primary demo:** Feature Build · the Founder types "Build me a CSV
-export with email delivery for the user dashboard." Crew spawns 5
-agents (EM, Backend, Frontend, QA, Reviewer), they collaborate, ship a
-real PR in ~12 minutes.
+```bash
+curl -s localhost:8000/projects/proj-5fcc0a58
+```
 
-See `PRODUCT_SPEC.md` for the full architecture, agent roster, demo
-flow, and phased build plan. Open `ui-mockup.html` in any browser for
-the visual language.
+```json
+{"name": "Payments Service Health Check Endpoint", "is_named": true}
+```
+
+Nothing in this repository chose that name. The EM did, by calling a tool.
+
+### Watching it
+
+| | | |
+|---|---|---|
+| what the crew **did** | `GET /projects/{id}/events` | tool calls, messages, spawns |
+| what the processes **logged** | Grafana, `svc/grafana` :3000 | filtered by project and role |
+| what the **model** saw | Phoenix, `svc/phoenix` :6006 | prompts, completions, tokens |
+
+The third is usually where a bug turns out to be. The model almost always did
+something reasonable given what it was shown; the mistake is in what it was
+shown.
+
+### Stopping
+
+```bash
+./scripts/teardown.sh          # deletes the namespace, and with it everything
+```
+
+---
+
+## How a request becomes a running agent
+
+```
+POST /projects
+      │
+      ▼
+CrewService.open_project ──────► domain/caps.py     "may another EM start?"
+      │                                 ▲
+      │                                 │ census: a label selector over live Jobs
+      ▼                                 │
+KubernetesAgentRuntime.launch ──────────┘
+      │
+      ▼
+   one Job created ─────► and the control plane stops being responsible
+                                │
+                                ▼
+                   kubelet runs `python -m agents.main`
+                                │
+                     AGENT_ROLE ──► which system prompt, which tools, which skills
+                     PROJECT_ID ──► which Redis channel, which workspace
+                     ASSIGNMENT ──► the first thing it works on
+```
+
+Two details in there are load-bearing.
+
+**The count comes from the cluster.** A label selector over live Jobs, asked
+fresh each time. The previous implementation kept a dictionary in the control
+plane, which said zero after every restart and let the founder spawn straight
+past the ceiling while eight agents were running.
+
+**The assignment travels as an environment variable**, not as a published
+message. A pod that finishes booting three seconds after the message went out
+would otherwise wait forever for something that already happened.
+
+---
+
+## Layout
+
+```
+contracts/          the wire format · owned by neither side
+  events.py           Event, EventKind, the channel name
+  agent_env.py        which env vars a Job sets and an agent reads
+
+apps/control_plane/
+  domain/             rules. no I/O whatsoever
+  ports/              contracts. what is needed, never how
+  adapters/           I/O. no rules
+  service.py          use cases · the only layer that knows both
+  api/                HTTP. no decisions
+
+agents/
+  main.py             the entry point every container runs
+  shared/
+    agent_loop.py     the harness: create_deep_agent + the bus
+    telemetry.py      middleware · what makes a pod's thinking visible
+    agent_tools.py    per-role tool catalogues
+  em/ pm/ backend/ …  a system_prompt.md each. that is the whole difference
+
+skills/             instructions loaded on demand
+  base/               every role
+  roles/<role>/       layered on top
+
+mocks/              MCP services · tickets, github, sandbox, browser, jira
+deploy/             every Kubernetes manifest
+notebooks/          the teaching ladder, 01 → 08
+```
+
+### Why `contracts/` is separate
+
+Because it drifted. The launcher set `AGENT_ROLE`/`PROJECT_ID` while the agent
+read `CREW_ROLE`/`CREW_TASK_ID`. Agents published `{from, type}` onto
+`crew/task/<id>/messages`; the control plane read `{source, kind}` from
+`crew/project/<id>/events`.
+
+Nothing failed loudly. The events simply went nowhere. One definition now,
+imported by both sides, so a rename that misses one side does not compile.
+
+### Why `domain/` has no imports
+
+So the rules can be tested with nothing running:
+
+```
+$ pytest tests/ -q
+55 passed in 0.4s
+```
+
+That covers the spawn caps, the naming rules, the refusal messages and the
+whole HTTP surface — faster than a container can start, because
+`FakeAgentRuntime` satisfies the same port as the Kubernetes one and nothing
+above the port can tell them apart.
+
+---
+
+## The five things worth knowing
+
+### 1 · A role is a prompt and a tool catalogue
+
+The Engineering Manager and the QA Engineer run identical code. There is one
+`agents/main.py`. What differs is `system_prompt.md`, which skills the role can
+see, and which tools are bound in.
+
+`spawn_agent` and `name_project` appear in exactly one catalogue. A backend
+engineer cannot build itself a team, and no prompt wording can change that,
+because the function was never bound. **Absence beats instruction.**
+
+### 2 · Caps have three layers
+
+| | enforced by | overridable |
+|---|---|---|
+| 4 backend engineers per project | `domain/caps.py` | yes, by the founder |
+| 12 cluster-wide | `domain/caps.py` | no — approval does not create cluster |
+| the ResourceQuota | the API server, at admission | no, and it does not trust our code |
+
+The refusal is written for a language model to read:
+
+> This project already has 4 of 4 backend_engineer agents. Give the work to one
+> of them, or split it differently. **Do not retry this spawn** — ask the
+> founder to approve an override if you genuinely need another.
+
+A bare 409 invites a retry loop against a limit that will not move.
+
+### 3 · Skills cost their description line
+
+A system prompt is paid for on every model call. A skill is paid for only when
+it is opened. `SkillsMiddleware` injects the frontmatter — name, description,
+path — and the body is fetched with `read_file` if and only if the model
+decides it is relevant.
+
+Measured, given six skills and one ambiguous request: **one file opened.**
+
+Which skills a role can see is decided by which directories are in its source
+list. A backend engineer's list never contains the EM's, so it cannot read the
+scoping playbook.
+
+### 4 · The container is the computer
+
+Whatever you want an agent to be able to do, you arrange by choosing the
+computer it gets.
+
+The sandbox is the sharpest case. `sandbox_exec` runs each command as its own
+Job: no service-account token, read-only root filesystem, every capability
+dropped, a hard deadline, and the project's workspace as the only thing it can
+see. The command is `shlex.split`, never handed to a shell, so
+`pytest; rm -rf /` is a file-not-found for an oddly named test.
+
+It used to drive a container through the host's `docker.sock`. Beyond not
+working in a cluster, that hands the service running model-written code control
+of the machine.
+
+### 5 · Escalation does not block
+
+`interrupt_on` suspends the graph until a human answers. Correct for one agent
+with someone watching; a deadlock for six pods at 2am.
+
+So `escalate_to_founder` publishes the question, tells the agent to proceed on
+its best judgement and record the assumption, and lets a real answer arrive
+later as an ordinary message. Liveness over strict gating — a deliberate trade,
+and one parameter away from the other choice.
+
+---
+
+## The notebooks
+
+Written for someone who knows LangGraph and has not met a harness. They do not
+teach by comparison.
+
+| | | needs |
+|---|---|---|
+| 01 | What a harness is | the library |
+| 02 | A middleware, built by hand | the library |
+| 03 | The filesystem middleware | the library |
+| 04 | Skills, and paying only for what you read | the library |
+| 05 | Sub-agents, and why ours are pods | the repo |
+| 06 | The middlewares that take things away | the repo |
+| 07 | The team harness | the repo |
+| 08 | End to end | a running cluster |
+
+Every cell is executed against real infrastructure before it is committed; the
+outputs you see are the outputs it produced.
+
+---
+
+## Configuration
+
+`.env`, never committed:
+
+```
+GOOGLE_API_KEY=...        # required
+LANGSMITH_API_KEY=...     # optional second trace sink
+E2B_API_KEY=...           # optional, unused by default
+```
+
+`./scripts/k8s-secrets.sh` pushes those into the cluster as `crew-secrets`.
+Non-secret settings — model name, service URLs — are in `deploy/04-config.yaml`
+and can be changed without rebuilding an image.
+
+> `deploy/secrets.example.yaml.txt` has a `.txt` extension deliberately. As a
+> `.yaml` it was picked up by `kubectl apply -f deploy/` and quietly overwrote
+> the real Secret with `replace-me`, which fails much later and somewhere else.
+
+---
+
+## Known limits
+
+* **Project state is in memory.** A control-plane restart forgets project names
+  and history. Agents keep running — their lifecycle is the cluster's — and
+  `InMemoryProjectStore` is one port implementation away from Postgres.
+* **Redis is disposable.** No persistence, no replication. An in-flight turn
+  dies with it; the work is on the volume.
+* **Grafana has anonymous admin access.** It is a teaching cluster on a laptop.
+* **The MCP services are mocks.** GitHub, JIRA and tickets are stand-ins with
+  the same interface, so the lesson does not depend on anyone holding a token.
+  The sandbox and browser are real.

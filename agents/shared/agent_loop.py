@@ -30,7 +30,7 @@ import redis.asyncio as redis
 from contracts.agent_env import SKILLS_ROOT, WORKSPACE, AgentIdentity
 from contracts.events import ACTIONABLE_KINDS, Event, EventKind, channel_for
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -163,7 +163,7 @@ class Harness:
             model=ChatGoogleGenerativeAI(model=identity.model),
             system_prompt=system_prompt,
             tools=tools,
-            backend=_filesystem_backend(),
+            backend=_backend(),
             skills=_skill_sources(identity.role),
             middleware=[TelemetryMiddleware(identity, bus)],
         )
@@ -204,14 +204,31 @@ class Harness:
             self.history = self.history[-MAX_HISTORY_MESSAGES:]
 
 
-def _filesystem_backend() -> FilesystemBackend:
-    """The project volume, as the agent's filesystem.
+SKILLS_MOUNT = "/skills"
+"""Where skills appear *to the agent*, which is not where they are on disk."""
 
-    ``virtual_mode`` roots every path the model uses at this directory, so a
-    model that asks for ``/etc/passwd`` gets ``<workspace>/etc/passwd``.
+
+def _backend() -> CompositeBackend:
+    """The agent's filesystem: its project, plus its skills, and nothing else.
+
+    Two roots, deliberately:
+
+    * ``/`` is the project's workspace. ``virtual_mode`` rewrites every path
+      the model uses to sit under it, so a model asking for ``/etc/passwd``
+      gets ``<workspace>/etc/passwd``.
+    * ``/skills`` is the skills tree, which lives in the image.
+
+    The second route is not a convenience. Skill paths are resolved *through
+    the backend*, so with a single workspace-rooted backend, a source at
+    ``/app/skills/base`` was rewritten to ``<workspace>/app/skills/base`` and
+    every skill failed to load with `path_not_found` -- while the agent
+    carried on answering, unskilled and without complaint.
     """
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
-    return FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True)
+    return CompositeBackend(
+        default=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
+        routes={SKILLS_MOUNT: FilesystemBackend(root_dir=SKILLS_ROOT, virtual_mode=True)},
+    )
 
 
 def _skill_sources(role: str) -> list[str]:
@@ -227,11 +244,14 @@ def _skill_sources(role: str) -> list[str]:
     never in its list. That is scoping by construction rather than by asking
     the model nicely.
     """
-    root = Path(SKILLS_ROOT)
-    candidates = [root / "base", root / "roles" / role.replace("_", "-")]
-    sources = [str(p) for p in candidates if p.is_dir()]
+    on_disk = Path(SKILLS_ROOT)
+    relative = [Path("base"), Path("roles") / role.replace("_", "-")]
+
+    # Existence is checked on disk; the paths handed to the middleware are the
+    # ones the *backend* understands, under the /skills mount.
+    sources = [f"{SKILLS_MOUNT}/{rel}" for rel in relative if (on_disk / rel).is_dir()]
     if not sources:
-        log.warning("harness.no_skills root=%s role=%s", root, role)
+        log.warning("harness.no_skills root=%s role=%s", on_disk, role)
     return sources
 
 
