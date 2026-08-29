@@ -119,11 +119,18 @@ class TelemetryMiddleware(AgentMiddleware):
 
         usage = getattr(last, "usage_metadata", None) or {}
         if usage:
+            # `cache_read` is what implicit caching actually bought. Without it
+            # the token count says a call was expensive and cannot say whether
+            # it was *re-read* -- which is the only number that tells you if a
+            # stable prefix is paying for itself.
+            details = usage.get("input_token_details") or {}
+            cached = details.get("cache_read", 0) or usage.get("cached_content_token_count", 0)
             await self._emit(
                 EventKind.USAGE,
                 {
                     "input_tokens": usage.get("input_tokens", 0),
                     "output_tokens": usage.get("output_tokens", 0),
+                    "cached_tokens": cached,
                     "model": self.identity.model,
                 },
             )

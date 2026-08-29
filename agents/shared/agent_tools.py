@@ -60,9 +60,11 @@ ROLE_TOOLS: dict[str, list[str]] = {
         # to the PM instead of answering a product question itself.
         "delegate_to",
     ],
+    # No browser and no jira · the PM writes the spec from what it knows, in
+    # one pass. Research was the loop: every scope claim demanded a source,
+    # every source demanded a screenshot.
     "product_manager": [
         "read_ticket", "add_ticket_comment",
-        "navigate", "screenshot_and_annotate", "jira_create_issue",
     ],
     "backend_engineer": [
         "read_ticket", "sandbox_exec", "github_open_pr",
@@ -70,9 +72,10 @@ ROLE_TOOLS: dict[str, list[str]] = {
     "frontend_engineer": [
         "read_ticket", "sandbox_exec", "github_open_pr",
     ],
+    # One pass over the code that exists · running it is the check, so no
+    # browser and no PR reading.
     "qa_engineer": [
         "read_ticket", "add_ticket_comment", "sandbox_exec",
-        "github_read_pr", "navigate", "screenshot_and_annotate",
     ],
     "code_reviewer": [
         "read_ticket", "github_read_pr", "github_post_comment",

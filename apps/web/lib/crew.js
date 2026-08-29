@@ -4,10 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 // ─── config ──────────────────────────────────────────────────────────────
 
+// 8000 is where `kubectl port-forward -n crew svc/control-plane 8000:8000`
+// puts the API, which is the only way to reach it from a browser · nothing in
+// the cluster is exposed otherwise. Override both for a different forward.
 export const CONTROL_PLANE =
-  process.env.NEXT_PUBLIC_CONTROL_PLANE_URL || "http://localhost:8001";
+  process.env.NEXT_PUBLIC_CONTROL_PLANE_URL || "http://localhost:8000";
+// Origin only · the path is per project: /projects/{id}/stream
 export const WS_BASE =
-  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8001/stream";
+  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
 // ─── role metadata ───────────────────────────────────────────────────────
 // Canonical role names (from the control plane) → display metadata.
@@ -79,8 +83,26 @@ export function useCrew() {
   const [error, setError] = useState(null);
   const wsRef = useRef(null);
 
-  const apply = useCallback((envelope) => {
-    const { from, type, payload = {}, at } = envelope || {};
+  // The control plane's envelope is {project_id, kind, source, payload, at, to}
+  // (contracts/events.py). This console was written against an older
+  // {from, type, ...}. Translate once, here, rather than everywhere below.
+  const KIND_TO_TYPE = {
+    agent_ready: "intro",
+    agent_thinking: "reasoning",
+    agent_message: "response",
+    tool_call: "tool_call",
+    founder_message: "founder_message",
+    escalation: "escalation",
+    usage: "usage",
+    error: "error",
+    spawn_refused: "warning",
+  };
+
+  const apply = useCallback((raw) => {
+    const envelope = raw || {};
+    const from = envelope.from ?? envelope.source;
+    const type = envelope.type ?? KIND_TO_TYPE[envelope.kind] ?? envelope.kind;
+    const { payload = {}, at } = envelope;
     const ts = at ? new Date(at * 1000) : new Date();
 
     setState((prev) => {
@@ -232,7 +254,7 @@ export function useCrew() {
     let retry = null;
 
     const connect = () => {
-      ws = new WebSocket(`${WS_BASE}/${task.task_id}`);
+      ws = new WebSocket(`${WS_BASE}/projects/${task.task_id}/stream`);
       wsRef.current = ws;
       ws.onopen = () => setConnected(true);
       ws.onmessage = (e) => {
@@ -269,13 +291,14 @@ export function useCrew() {
   const startTask = useCallback(async (request, scenario = "build") => {
     setError(null);
     try {
-      const res = await fetch(`${CONTROL_PLANE}/tasks`, {
+      const res = await fetch(`${CONTROL_PLANE}/projects`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ request, scenario, local_hour: new Date().getHours() }),
+        body: JSON.stringify({ request }),
       });
-      if (!res.ok) throw new Error(`POST /tasks → ${res.status}`);
-      const t = await res.json();
+      if (!res.ok) throw new Error(`POST /projects → ${res.status}`);
+      const project = await res.json();
+      const t = { task_id: project.id, ...project };
       const createdAt = new Date();
       setState({
         ...EMPTY,
@@ -296,10 +319,10 @@ export function useCrew() {
       if (!task?.task_id) return;
       setError(null);
       try {
-        const res = await fetch(`${CONTROL_PLANE}/tasks/${task.task_id}/message`, {
+        const res = await fetch(`${CONTROL_PLANE}/projects/${task.task_id}/messages`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text, local_hour: new Date().getHours() }),
+          body: JSON.stringify({ text }),
         });
         if (!res.ok) throw new Error(`POST message → ${res.status}`);
       } catch (err) {
@@ -312,21 +335,13 @@ export function useCrew() {
   const spawnAgent = useCallback(
     async ({ role, assignment, override_cap }) => {
       if (!task?.task_id) throw new Error("no task running");
-      const res = await fetch(`${CONTROL_PLANE}/agents/spawn`, {
+      const res = await fetch(`${CONTROL_PLANE}/projects/${task.task_id}/agents`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          task_id: task.task_id,
           role,
-          requested_by: "founder",
-          override_cap: !!override_cap,
-          bootstrap_message: assignment
-            ? JSON.stringify({
-                from: "founder",
-                type: "work_assigned",
-                payload: { role, assignment, task_id: task.task_id },
-              })
-            : null,
+          assignment: assignment || "",
+          override: !!override_cap,
         }),
       });
       if (!res.ok) {

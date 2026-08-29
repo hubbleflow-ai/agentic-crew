@@ -1,7 +1,7 @@
 ---
 name: writing-a-ticket
 description: The house format for a task ticket, and what makes acceptance criteria testable. Use when authoring or updating ticket.md.
-allowed_tools: [read_file, write_file, edit_file]
+allowed-tools: [read_file, write_file, edit_file]
 ---
 
 # Writing a ticket

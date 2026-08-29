@@ -1,10 +1,18 @@
 """Builds notebooks/08_end_to_end.ipynb."""
+import ast
+
 import nbformat as nbf
 nb = nbf.v4.new_notebook()
 nb.metadata = {"kernelspec": {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"}}
 C=[]
 def md(t): C.append(nbf.v4.new_markdown_cell(t.strip()))
-def code(t): C.append(nbf.v4.new_code_cell(t.strip()))
+def code(t):
+    # A cell that cannot parse is a bug in *this* script, not in the notebook.
+    # Usually a lone \\n inside the triple-quoted source, which Python turns into
+    # a real newline and splits the generated line in half.
+    source = t.strip()
+    ast.parse(source)
+    C.append(nbf.v4.new_code_cell(source))
 
 md("""
 # 08 · End to end

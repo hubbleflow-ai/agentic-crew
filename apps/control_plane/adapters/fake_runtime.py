@@ -42,6 +42,14 @@ class FakeAgentRuntime:
         self._states[name] = AgentStatus(AgentState.RUNNING)
         return AgentHandle(id=name, name=name, role=spec.role, project_id=spec.project_id)
 
+    async def stop_project(self, project_id: str) -> int:
+        """Forget every agent on a project, as a cluster would delete them."""
+        doomed = [n for n, spec in self._specs.items() if spec.project_id == project_id]
+        for name in doomed:
+            self._states[name] = AgentStatus(AgentState.SUCCEEDED)
+            del self._specs[name]
+        return len(doomed)
+
     async def status(self, handle: AgentHandle) -> AgentStatus:
         return self._states.get(handle.name, AgentStatus(AgentState.SUCCEEDED))
 

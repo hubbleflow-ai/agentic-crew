@@ -1,7 +1,7 @@
 ---
 name: scoping-a-request
 description: How to turn a vague founder message into a named project and a ticket, and how to decide whether to answer directly or bring in the PM. Read on your first message.
-allowed_tools: [read_ticket, write_ticket, name_project, spawn_agent, escalate_to_founder]
+allowed-tools: [read_ticket, write_ticket, name_project, spawn_agent, escalate_to_founder]
 ---
 
 # Scoping a request

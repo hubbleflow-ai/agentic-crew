@@ -12,6 +12,7 @@ fakes and still exercise the real decision logic.
 
 from __future__ import annotations
 
+import os
 import secrets
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -31,6 +32,16 @@ from apps.control_plane.ports.runtime import AgentHandle, AgentRuntime, AgentSpe
 from apps.control_plane.ports.store import ProjectStore
 
 log = setup_logging("crew-service")
+
+MAX_PROJECT_TOKENS = int(os.environ.get("CREW_PROJECT_TOKEN_BUDGET", "1000000"))
+"""How much thinking one project may buy before the crew is stopped.
+
+Not a suggestion to the model · a ceiling the control plane enforces by
+deleting the Jobs. Every other limit in this system is per-turn or per-agent,
+which bounds nothing: agents answer each other, every reply is a fresh turn,
+and the per-turn ceiling resets each time. One run reached 70M tokens in
+twenty minutes with every per-turn limit intact and obeyed.
+"""
 
 FIRST_ROLE = AgentRole.ENGINEERING_MANAGER
 """Who a new project starts with.
@@ -68,6 +79,8 @@ class CrewService:
         self._store = store
         self._runtime = runtime
         self._events = events
+        self._spend: dict[str, int] = {}
+        self._stopped: set[str] = set()
 
     # ─── projects ────────────────────────────────────────────────────────
 
@@ -313,6 +326,50 @@ class CrewService:
         """
         await self._events.publish(event)
 
+    async def _charge(self, event: Event) -> None:
+        """Add a turn's tokens to the project's bill, and stop it if spent.
+
+        The recorder already sees every event, so the meter costs one addition
+        per usage event and needs no new subscriber.
+        """
+        if event.kind is not EventKind.USAGE:
+            return
+
+        payload = event.payload
+        spent = self._spend.get(event.project_id, 0)
+        spent += int(payload.get("input_tokens", 0)) + int(payload.get("output_tokens", 0))
+        self._spend[event.project_id] = spent
+        if spent < MAX_PROJECT_TOKENS or event.project_id in self._stopped:
+            return
+
+        # Mark first · stopping is async, and a burst of usage events must not
+        # each fire their own teardown.
+        self._stopped.add(event.project_id)
+        stopped = await self._runtime.stop_project(event.project_id)
+        log.error(
+            "project.over_budget project_id=%s spent=%d limit=%d agents_stopped=%d",
+            event.project_id,
+            spent,
+            MAX_PROJECT_TOKENS,
+            stopped,
+        )
+        await self._emit(
+            Event(
+                project_id=event.project_id,
+                kind=EventKind.ERROR,
+                source="control-plane",
+                payload={
+                    "error": "token budget exhausted",
+                    "spent": spent,
+                    "limit": MAX_PROJECT_TOKENS,
+                    "agents_stopped": stopped,
+                },
+            )
+        )
+        project = await self._store.get(event.project_id)
+        if project is not None and not project.status.is_terminal:
+            await self._store.save(project.finish(cancelled=True))
+
     async def record(self) -> None:
         """Write every event on the bus into the store. Runs forever.
 
@@ -322,6 +379,7 @@ class CrewService:
         async for event in self._events.subscribe_all():
             try:
                 await self._store.append_event(event)
+                await self._charge(event)
             except Exception:
                 # A history gap is bad; a recorder that dies and leaves every
                 # later event unrecorded is worse.

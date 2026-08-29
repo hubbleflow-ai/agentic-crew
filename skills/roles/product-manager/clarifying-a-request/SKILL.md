@@ -1,7 +1,7 @@
 ---
 name: clarifying-a-request
 description: How to turn a vague founder request into something buildable, without turning it into an interrogation. Read when the EM brings you in on an ambiguous ask.
-allowed_tools: [read_ticket, add_ticket_comment, navigate, screenshot_and_annotate]
+allowed-tools: [read_ticket, add_ticket_comment, navigate, screenshot_and_annotate]
 ---
 
 # Clarifying a request

@@ -44,7 +44,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # One subscriber writing down everything every agent says. Without it the
     # only recorded history is what this process itself emitted.
-    recorder = asyncio.create_task(service.record())
+    #
+    # Two things here are not decoration. `asyncio` holds only a *weak*
+    # reference to a task, so one kept alive by a local variable alone can be
+    # collected mid-flight; it is parked on `app.state` instead. And a task
+    # nobody awaits swallows its own exception -- this recorder died silently
+    # at startup once, and the only symptom was that every project's history
+    # was empty, days later. The callback makes that impossible to miss.
+    recorder = asyncio.create_task(service.record(), name="recorder")
+    app.state.recorder = recorder
+
+    def _recorder_stopped(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            log.error("recorder.died · project history stops here", exc_info=error)
+        else:
+            log.error("recorder.exited · it should run for the life of the process")
+
+    recorder.add_done_callback(_recorder_stopped)
+    log.info("recorder.started pattern=all-projects")
     log.info(
         "control-plane.ready namespace=%s image=%s",
         config["namespace"],

@@ -40,22 +40,31 @@ class AgentRole(StrEnum):
 PER_PROJECT_LIMITS: dict[AgentRole, int] = {
     AgentRole.ENGINEERING_MANAGER: 1,
     AgentRole.PRODUCT_MANAGER: 1,
-    AgentRole.BACKEND_ENGINEER: 4,
-    AgentRole.FRONTEND_ENGINEER: 2,
-    AgentRole.QA_ENGINEER: 2,
-    AgentRole.CODE_REVIEWER: 2,
+    AgentRole.BACKEND_ENGINEER: 1,
+    AgentRole.FRONTEND_ENGINEER: 1,
+    # QA checks once and does not check again · the prompts enforce the round
+    # count, this enforces the head count.
+    #
+    # Zero is "this crew does not use that role", enforced rather than asked
+    # for. The code reviewer is what made a project unbounded: a review
+    # comment is an event, the engineer reacts to it, that reply is another
+    # event, and the reviewer reacts again. Each hop is a fresh turn, so the
+    # per-turn model-call ceiling resets every time and nothing ever says
+    # "finished". One run cost 70M tokens in twenty minutes that way.
+    AgentRole.QA_ENGINEER: 1,
+    AgentRole.CODE_REVIEWER: 0,
 }
 
 GLOBAL_LIMITS: dict[AgentRole, int] = {
-    AgentRole.ENGINEERING_MANAGER: 6,
-    AgentRole.PRODUCT_MANAGER: 6,
-    AgentRole.BACKEND_ENGINEER: 12,
-    AgentRole.FRONTEND_ENGINEER: 6,
-    AgentRole.QA_ENGINEER: 6,
-    AgentRole.CODE_REVIEWER: 6,
+    AgentRole.ENGINEERING_MANAGER: 3,
+    AgentRole.PRODUCT_MANAGER: 3,
+    AgentRole.BACKEND_ENGINEER: 3,
+    AgentRole.FRONTEND_ENGINEER: 3,
+    AgentRole.QA_ENGINEER: 1,
+    AgentRole.CODE_REVIEWER: 0,
 }
 
-MAX_CONCURRENT_PROJECTS = 3
+MAX_CONCURRENT_PROJECTS = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +103,20 @@ def check_spawn(census: Census, *, override: bool = False) -> Refusal | None:
     resource ceiling and is never overridable — no amount of founder approval
     creates more cluster.
     """
+    # Asked first, and not overridable: a limit of zero is not crowding, it is
+    # "this crew has no such role". Checked before the global ceiling so the
+    # refusal says that, rather than "0 of a limit of 0".
+    if PER_PROJECT_LIMITS[census.role] == 0:
+        return Refusal(
+            scope="role",
+            limit=0,
+            current=census.in_project,
+            message=(
+                f"This crew has no {census.role} role. Do not spawn one and do not "
+                "retry. If the work needs checking, do it yourself before you finish."
+            ),
+        )
+
     global_limit = GLOBAL_LIMITS[census.role]
     if census.everywhere >= global_limit:
         return Refusal(

@@ -244,8 +244,8 @@ teach by comparison.
 | | | needs |
 |---|---|---|
 | 01 | What a harness is | the library |
-| 02 | A middleware, built by hand | the library |
-| 03 | The filesystem middleware | the library |
+| 02 | The filesystem middleware | the library |
+| 03 | A middleware, built by hand | the library |
 | 04 | Skills, and paying only for what you read | the library |
 | 05 | Sub-agents, and why ours are pods | the repo |
 | 06 | The middlewares that take things away | the repo |
@@ -537,13 +537,6 @@ you want with the `tar` command above **first**.
 | `spawn refused` in the UI | a cap said no, on purpose | `kubectl logs -n crew deploy/control-plane \| grep spawn.refused` |
 | `kubectl`: TLS handshake timeout | minikube busy or paused | `minikube status`, then retry |
 | projects empty after a restart | Redis running without its AOF | `kubectl exec -n crew deploy/redis -- redis-cli INFO persistence` |
-
-### The Compose path
-
-`docker-compose.yml` and `./scripts/build-images.sh` still run the older
-all-in-Docker stack (`crew-agent:latest`, `crew-sandbox:latest`). Kubernetes is
-the real deployment — one Job per agent is the whole point — and Compose is kept
-only for a laptop with no cluster. The two do not share images or tags.
 
 ---
 

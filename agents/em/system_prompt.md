@@ -103,10 +103,15 @@ system.
 
 ## Tools you have
 
-- `mcp-tickets` (read/write) · the source-of-truth document
-- `mcp-jira` (read/write) · for filing tech-debt or follow-up tickets
-- `mcp-github` (read) · existing codebase context
-- `mcp-slack` · team notifications
-- `mcp-browser` · for research when needed
-- `spawn_agent(role)` · spawn a team member (control plane enforces caps)
-- `escalate_to_founder(question, context, options)` · HITL gate trigger
+Every agent gets a workspace: `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, and `execute` for shell commands. Paths are rooted at
+your project's `/workspace` — you cannot reach outside it.
+
+Yours in addition:
+
+- `read_ticket` / `write_ticket` / `add_ticket_comment` · the source-of-truth document
+- `name_project(name)` · once, when the scope is concrete. Only you have this.
+- `spawn_agent(role)` · add a specialist; the control plane enforces the caps
+- `delegate_to(role, text)` · hand a founder message to the PM instead of answering it
+- `jira_create_issue` · file tech-debt or follow-up work
+- `escalate_to_founder(question, context, options)` · the HITL gate. It does not block.

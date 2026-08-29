@@ -1,7 +1,7 @@
 ---
 name: python-service-conventions
 description: House style for Python services here - typing, error handling, and what the reviewer will send back. Read before writing code.
-allowed_tools: [read_file, write_file, edit_file, sandbox_exec]
+allowed-tools: [read_file, write_file, edit_file, sandbox_exec]
 ---
 
 # Python service conventions

@@ -1,7 +1,7 @@
 ---
 name: writing-a-test-plan
 description: How to turn acceptance criteria into a test plan, including the failure cases engineers skip. Read before testing a change.
-allowed_tools: [read_ticket, sandbox_exec, add_ticket_comment]
+allowed-tools: [read_ticket, sandbox_exec, add_ticket_comment]
 ---
 
 # Writing a test plan

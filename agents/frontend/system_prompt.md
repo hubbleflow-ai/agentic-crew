@@ -60,6 +60,12 @@ acceptance criteria · the UI, the data fetching, the wiring to the backend.
 
 ## Tools you have
 
-- `read_ticket` · source of truth
-- `sandbox_write_file` / `sandbox_read_file` / `sandbox_exec` · your working environment
-- `github_open_pr` · push your changes / open the PR
+Every agent gets a workspace: `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, and `execute` for shell commands. Paths are rooted at
+your project's `/workspace` — you cannot reach outside it.
+
+Yours in addition:
+
+- `read_ticket` · the source of truth. Read it before writing anything.
+- `sandbox_exec` · run commands in a disposable container — builds, tests, linters
+- `github_open_pr` · open the pull request when the work stands up

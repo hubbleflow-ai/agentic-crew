@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 from apps.control_plane.adapters.fake_runtime import FakeAgentRuntime
 from apps.control_plane.adapters.memory_store import InMemoryProjectStore
-from apps.control_plane.domain.caps import MAX_CONCURRENT_PROJECTS, AgentRole
+from apps.control_plane.domain.caps import MAX_CONCURRENT_PROJECTS, PER_PROJECT_LIMITS, AgentRole
 from apps.control_plane.domain.project import PROVISIONAL_NAME, ProjectStatus
 from apps.control_plane.ports.events import Event, EventKind
 from apps.control_plane.service import CapExceeded, CrewService
@@ -123,12 +123,13 @@ class TestSpawnCaps:
     @pytest.mark.asyncio
     async def test_override_lifts_the_project_cap(self, crew: Crew) -> None:
         project = await crew.service.open_project("build it")
-        for _ in range(4):
+        for _ in range(PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]):
             await crew.service.spawn(project.id, AgentRole.BACKEND_ENGINEER)
         with pytest.raises(CapExceeded):
             await crew.service.spawn(project.id, AgentRole.BACKEND_ENGINEER)
         await crew.service.spawn(project.id, AgentRole.BACKEND_ENGINEER, override=True)
-        assert sum(s.role is AgentRole.BACKEND_ENGINEER for s in crew.runtime.launched) == 5
+        launched = sum(s.role is AgentRole.BACKEND_ENGINEER for s in crew.runtime.launched)
+        assert launched == PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER] + 1
 
     @pytest.mark.asyncio
     async def test_census_comes_from_the_runtime_not_a_counter(self, crew: Crew) -> None:
@@ -140,7 +141,10 @@ class TestSpawnCaps:
         restarted = CrewService(
             store=crew.store, runtime=crew.runtime, events=crew.bus
         )
-        for _ in range(3):
+        # The first spawn above already used part of the cap; the restarted
+        # service must see it, so only the remainder is allowed.
+        remaining = PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER] - 1
+        for _ in range(remaining):
             await restarted.spawn(project.id, AgentRole.BACKEND_ENGINEER)
         with pytest.raises(CapExceeded):
             await restarted.spawn(project.id, AgentRole.BACKEND_ENGINEER)
@@ -152,3 +156,67 @@ class TestHistory:
         project = await crew.service.open_project("hi")
         replay = await crew.store.history(project.id)
         assert [e.kind for e in replay] == crew.bus.kinds()
+
+
+class TestTokenBudget:
+    """The ceiling that is denominated in money rather than in turns.
+
+    Every other limit here is per-turn or per-agent, and bounds nothing on its
+    own: agents answer each other, every reply is a fresh turn, and the
+    per-turn model-call ceiling resets each time. One project reached 70M
+    tokens in twenty minutes with every one of those limits intact.
+    """
+
+    @pytest.mark.asyncio
+    async def test_usage_under_the_budget_changes_nothing(self, crew: Crew) -> None:
+        project = await crew.service.open_project("build it")
+        await crew.service._charge(
+            Event(
+                project_id=project.id,
+                kind=EventKind.USAGE,
+                source="backend_engineer/x",
+                payload={"input_tokens": 10, "output_tokens": 5},
+            )
+        )
+        assert crew.runtime.launched, "agents should still be running"
+        assert not (await crew.service.get_project(project.id)).status.is_terminal
+
+    @pytest.mark.asyncio
+    async def test_passing_the_budget_stops_every_agent(
+        self, crew: Crew, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("apps.control_plane.service.MAX_PROJECT_TOKENS", 100)
+        project = await crew.service.open_project("build it")
+
+        await crew.service._charge(
+            Event(
+                project_id=project.id,
+                kind=EventKind.USAGE,
+                source="backend_engineer/x",
+                payload={"input_tokens": 90, "output_tokens": 20},
+            )
+        )
+
+        assert await crew.runtime.census(AgentRole.ENGINEERING_MANAGER, project.id) == 0
+        assert (await crew.service.get_project(project.id)).status is ProjectStatus.CANCELLED
+        assert EventKind.ERROR in crew.bus.kinds()
+
+    @pytest.mark.asyncio
+    async def test_it_stops_once_not_once_per_event(
+        self, crew: Crew, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A burst of usage events must not each fire their own teardown."""
+        monkeypatch.setattr("apps.control_plane.service.MAX_PROJECT_TOKENS", 10)
+        project = await crew.service.open_project("build it")
+        over = Event(
+            project_id=project.id,
+            kind=EventKind.USAGE,
+            source="backend_engineer/x",
+            payload={"input_tokens": 50, "output_tokens": 0},
+        )
+
+        for _ in range(3):
+            await crew.service._charge(over)
+
+        errors = [k for k in crew.bus.kinds() if k is EventKind.ERROR]
+        assert len(errors) == 1

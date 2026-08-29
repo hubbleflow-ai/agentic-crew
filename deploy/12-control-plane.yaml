@@ -11,6 +11,11 @@ metadata:
   labels: {app: control-plane}
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate. The control plane runs the single subscriber
+  # that writes project history; a rolling update overlaps two pods, both
+  # recorders append, and the transcript gains duplicate events for the few
+  # seconds they coexist. One at a time, at the cost of a blink of downtime.
+  strategy: {type: Recreate}
   selector:
     matchLabels: {app: control-plane}
   template:

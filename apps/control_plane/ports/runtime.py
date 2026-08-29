@@ -144,4 +144,14 @@ class AgentRuntime(Protocol):
         """
         ...
 
+    async def stop_project(self, project_id: str) -> int:
+        """Kill every agent on a project. Returns how many were stopped.
+
+        The control plane could create agents and never end them, which is how
+        one run spent 70M tokens: a reviewer's comment is an event, the
+        engineer reacts, that reply is another event, and nothing in the loop
+        ever says finished. Creation without deletion is not a lifecycle.
+        """
+        ...
+
     async def logs(self, handle: AgentHandle, *, tail: int = 200) -> str: ...

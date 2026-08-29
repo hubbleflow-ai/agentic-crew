@@ -4,6 +4,11 @@ import pytest
 from apps.control_plane.adapters.fake_runtime import FakeAgentRuntime
 from apps.control_plane.adapters.memory_store import InMemoryProjectStore
 from apps.control_plane.api.routes import router
+from apps.control_plane.domain.caps import (
+    MAX_CONCURRENT_PROJECTS,
+    PER_PROJECT_LIMITS,
+    AgentRole,
+)
 from apps.control_plane.domain.project import PROVISIONAL_NAME
 from apps.control_plane.ports.events import Event
 from apps.control_plane.service import CrewService
@@ -67,11 +72,11 @@ class TestProjects:
         assert spawn.status_code == 404
 
     def test_concurrent_projects_are_listed(self, client: TestClient) -> None:
-        ids = {open_project(client, f"job {i}")["id"] for i in range(3)}
+        ids = {open_project(client, f"job {i}")["id"] for i in range(MAX_CONCURRENT_PROJECTS)}
         assert {p["id"] for p in client.get("/projects").json()} == ids
 
     def test_a_fourth_project_is_refused_with_the_reason(self, client: TestClient) -> None:
-        for i in range(3):
+        for i in range(MAX_CONCURRENT_PROJECTS):
             open_project(client, f"job {i}")
         response = client.post("/projects", json={"request": "one more"})
         assert response.status_code == 409
@@ -87,7 +92,7 @@ class TestAgents:
 
     def test_spawning_past_the_cap_returns_409_with_guidance(self, client: TestClient) -> None:
         project = open_project(client)
-        for _ in range(4):
+        for _ in range(PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]):
             assert client.post(
                 f"/projects/{project['id']}/agents", json={"role": "backend_engineer"}
             ).status_code == 201
@@ -102,7 +107,7 @@ class TestAgents:
 
     def test_override_is_accepted_for_the_project_cap(self, client: TestClient) -> None:
         project = open_project(client)
-        for _ in range(4):
+        for _ in range(PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]):
             client.post(f"/projects/{project['id']}/agents", json={"role": "backend_engineer"})
         assert client.post(
             f"/projects/{project['id']}/agents",

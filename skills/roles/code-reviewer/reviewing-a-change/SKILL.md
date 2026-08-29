@@ -1,7 +1,7 @@
 ---
 name: reviewing-a-change
 description: What to look for in a change and what to leave alone, plus how to phrase a request for changes. Read before reviewing.
-allowed_tools: [github_read_pr, github_post_comment, github_request_changes, github_approve, sandbox_exec]
+allowed-tools: [github_read_pr, github_post_comment, github_request_changes, github_approve, sandbox_exec]
 ---
 
 # Reviewing a change

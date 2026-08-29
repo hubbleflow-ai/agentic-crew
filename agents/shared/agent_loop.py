@@ -61,9 +61,34 @@ Distinct from the filesystem middleware's eviction, which moves one oversized
 touch."""
 
 MAX_MODEL_CALLS_PER_TURN = 40
-"""A ceiling on one turn, so a model that has talked itself into a loop costs a
-bounded amount rather than an open-ended one. Reached is a bug to look at, not
-a limit to raise."""
+"""Default ceiling on one turn, for a role with no entry below.
+
+Reached is a bug to look at, not a limit to raise."""
+
+CALLS_PER_TURN: dict[str, int] = {
+    # The EM coordinates: read, decide, spawn, hand out work.
+    "engineering_manager": 24,
+    # One spec, written from what it knows. No research, so no browsing loop.
+    "product_manager": 8,
+    # Write the code and its tests, run them once, one correction.
+    "backend_engineer": 16,
+    "frontend_engineer": 16,
+    # Read the ticket, run the tests once, post one verdict.
+    "qa_engineer": 8,
+}
+"""What one turn may cost, per role.
+
+The prompts ask each role to work in a single pass. This is what happens when
+one does not: a prompt is an instruction, and an instruction is negotiable
+under pressure. These numbers are not. They were sized from the work each role
+actually has to do — a role that hits its ceiling has misunderstood its job,
+which is worth reading the transcript for rather than raising the number.
+"""
+
+
+def calls_per_turn(role: str) -> int:
+    """The ceiling for this role, or the default for one not listed."""
+    return CALLS_PER_TURN.get(role, MAX_MODEL_CALLS_PER_TURN)
 
 
 # ─── the bus ─────────────────────────────────────────────────────────────
@@ -198,7 +223,7 @@ class Harness:
                 # Nothing else bounds a turn. An agent that keeps calling
                 # tools without converging would otherwise run until the Job's
                 # deadline, spending the whole time.
-                ModelCallLimitMiddleware(thread_limit=MAX_MODEL_CALLS_PER_TURN),
+                ModelCallLimitMiddleware(thread_limit=calls_per_turn(identity.role)),
             ]),
         )
         self.tool_names = [getattr(t, "__name__", str(t)) for t in tools]
@@ -261,7 +286,14 @@ def _backend() -> CompositeBackend:
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
     return CompositeBackend(
         default=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
-        routes={SKILLS_MOUNT: FilesystemBackend(root_dir=SKILLS_ROOT, virtual_mode=True)},
+        # The trailing slash is load-bearing. CompositeBackend re-prefixes the
+        # paths `ls` returns with ``route_prefix[:-1]``, assuming the route was
+        # registered as a directory. Registered as "/skills" it hands back
+        # "/skill/base/..." -- one character short, so every SKILL.md read that
+        # follows misses, `_list_skills` returns nothing, and each agent boots
+        # with zero skills. No error is raised anywhere. `read` is unaffected,
+        # which is why this survived: skills were reachable, just never listed.
+        routes={f"{SKILLS_MOUNT}/": FilesystemBackend(root_dir=SKILLS_ROOT, virtual_mode=True)},
     )
 
 

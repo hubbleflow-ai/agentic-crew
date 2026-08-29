@@ -1,10 +1,18 @@
 """Builds notebooks/06_middlewares_that_constrain.ipynb."""
+import ast
+
 import nbformat as nbf
 nb = nbf.v4.new_notebook()
 nb.metadata = {"kernelspec": {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"}}
 C=[]
 def md(t): C.append(nbf.v4.new_markdown_cell(t.strip()))
-def code(t): C.append(nbf.v4.new_code_cell(t.strip()))
+def code(t):
+    # A cell that cannot parse is a bug in *this* script, not in the notebook.
+    # Usually a lone \\n inside the triple-quoted source, which Python turns into
+    # a real newline and splits the generated line in half.
+    source = t.strip()
+    ast.parse(source)
+    C.append(nbf.v4.new_code_cell(source))
 
 md("""
 # 06 · The middlewares that take things away
@@ -173,6 +181,17 @@ print("so even 'has no filesystem tools' is a middleware outcome.")
 """)
 
 md("""
+## The one we wrote lives in notebook 04
+
+Progressive disclosure of *tools* is the skills story finished, so it is built
+there: `SkillGatedTools`, in `agents/shared/skill_gated_tools.py`. It belongs to
+this notebook's theme too — it is a layer whose entire job is to hand the model
+**less** — and it is the clearest example of the pattern this notebook is about:
+the same hook that adds capability can withhold it.
+
+""")
+
+md("""
 ## What you now know
 
 1. A harness constrains as much as it enables; the same hook that adds
@@ -183,6 +202,9 @@ md("""
    watching makes a blocking gate a deadlock.
 4. The strongest constraint here is the tool catalogue. Absence beats
    instruction.
+5. Progressive disclosure is not only for instructions — see notebook 04's
+   `SkillGatedTools`, thirty lines built on the one hook the library left
+   unconnected.
 
 Next: everything DeepAgents does *not* give you, which is what
 `apps/control_plane/` is for.

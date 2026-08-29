@@ -3,7 +3,13 @@
 import pytest
 from apps.control_plane.adapters.fake_runtime import FakeAgentRuntime
 from apps.control_plane.adapters.k8s_runtime import KubernetesAgentRuntime, _job_name
-from apps.control_plane.domain.caps import AgentRole, Census, check_spawn
+from apps.control_plane.domain.caps import (
+    GLOBAL_LIMITS,
+    PER_PROJECT_LIMITS,
+    AgentRole,
+    Census,
+    check_spawn,
+)
 from apps.control_plane.ports.runtime import (
     AgentRuntime,
     AgentSpec,
@@ -30,11 +36,13 @@ class TestSpawnPathWithoutACluster:
     @pytest.mark.asyncio
     async def test_caps_hold_against_a_runtime(self) -> None:
         rt = FakeAgentRuntime()
+        cap = PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]
         results = [
-            await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "proj-a") for _ in range(6)
+            await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "proj-a")
+            for _ in range(cap + 2)
         ]
-        assert results == [True, True, True, True, False, False]
-        assert len(rt.launched) == 4
+        assert results == [True] * cap + [False, False]
+        assert len(rt.launched) == cap
 
     @pytest.mark.asyncio
     async def test_a_finished_agent_frees_its_slot(self) -> None:
@@ -48,19 +56,25 @@ class TestSpawnPathWithoutACluster:
     @pytest.mark.asyncio
     async def test_projects_do_not_consume_each_other_s_slots(self) -> None:
         rt = FakeAgentRuntime()
-        for _ in range(4):
+        for _ in range(PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]):
             await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "proj-a")
         assert await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "proj-b")
 
     @pytest.mark.asyncio
-    async def test_the_global_ceiling_stops_the_third_project(self) -> None:
-        """4 + 4 + 4 = 12, which is the cluster-wide limit."""
+    async def test_the_global_ceiling_stops_one_project_too_many(self) -> None:
+        """Per-project caps do not add up to a free-for-all · the cluster-wide
+        ceiling is what stops the Nth project from fitting."""
         rt = FakeAgentRuntime()
-        for project in ("a", "b", "c"):
-            for _ in range(4):
+        per_project = PER_PROJECT_LIMITS[AgentRole.BACKEND_ENGINEER]
+        needed = GLOBAL_LIMITS[AgentRole.BACKEND_ENGINEER] // per_project
+        for project in (f"p{i}" for i in range(needed)):
+            for _ in range(per_project):
                 await self._spawn(rt, AgentRole.BACKEND_ENGINEER, project)
-        assert await rt.census(AgentRole.BACKEND_ENGINEER) == 12
-        assert not await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "d")
+
+        assert await rt.census(AgentRole.BACKEND_ENGINEER) == GLOBAL_LIMITS[
+            AgentRole.BACKEND_ENGINEER
+        ]
+        assert not await self._spawn(rt, AgentRole.BACKEND_ENGINEER, "one-more")
 
 
 class TestJobNames:

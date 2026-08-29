@@ -1,7 +1,7 @@
 ---
 name: working-in-the-workspace
 description: How the shared /workspace volume is organised, and where to put files so other agents find them. Read before writing your first file on a project.
-allowed_tools: [ls, read_file, write_file, edit_file, glob]
+allowed-tools: [ls, read_file, write_file, edit_file, glob]
 ---
 
 # Working in the workspace

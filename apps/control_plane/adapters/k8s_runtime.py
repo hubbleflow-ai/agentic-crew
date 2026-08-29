@@ -52,8 +52,9 @@ TTL_AFTER_FINISHED_S = 300
 """Finished Jobs linger five minutes so logs stay fetchable, then the cluster
 deletes them. Without this, a day of demos leaves hundreds of dead objects."""
 
-ACTIVE_DEADLINE_S = 3600
-"""An agent that has not finished in an hour is stuck, not thorough."""
+ACTIVE_DEADLINE_S = 600
+"""Ten minutes. An agent still going after that is looping, not thorough — and
+an hour of nine agents looping is what emptied a prepaid balance once."""
 
 
 class KubernetesAgentRuntime:
@@ -274,6 +275,25 @@ class KubernetesAgentRuntime:
             namespace=self.namespace, label_selector=selector
         )
         return [job for job in jobs.items if job.status.active]
+
+    async def stop_project(self, project_id: str) -> int:
+        """Delete every Job this project owns · one label selector, one call.
+
+        ``propagation_policy="Background"`` so the pods go with the Jobs;
+        without it the Jobs disappear and their containers keep thinking.
+        """
+        selector = f"{LABEL_MANAGED}={MANAGED_BY},{LABEL_PROJECT}={project_id}"
+        jobs = await self.batch.list_namespaced_job(
+            namespace=self.namespace, label_selector=selector
+        )
+        await self.batch.delete_collection_namespaced_job(
+            namespace=self.namespace,
+            label_selector=selector,
+            propagation_policy="Background",
+        )
+        count = len(jobs.items)
+        log.warning("project.stopped project_id=%s agents=%d", project_id, count)
+        return count
 
     async def logs(self, handle: AgentHandle, *, tail: int = 200) -> str:
         """Fetch the agent's stdout, via the pod the Job created."""
